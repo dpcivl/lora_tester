@@ -1,0 +1,170 @@
+---
+:source:
+  :file: test/test_time.c
+  :dirname: test
+  :basename: test_time.c
+:successes:
+- :test: test_TIME_GetCurrentMs_should_return_current_time
+  :line: 24
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_GetCurrentMs_should_return_updated_time_after_advance
+  :line: 33
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_DelayMs_should_advance_time
+  :line: 42
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_IsTimeout_should_return_false_when_not_timeout
+  :line: 52
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_IsTimeout_should_return_true_when_timeout
+  :line: 63
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_IsTimeout_should_return_true_when_exact_timeout
+  :line: 74
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_Mock_SetCurrentTime_should_set_current_time
+  :line: 89
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_Mock_AdvanceTime_should_increase_current_time
+  :line: 97
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_Mock_AdvanceTime_should_work_with_zero_advance
+  :line: 106
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_Mock_Reset_should_reset_to_zero
+  :line: 115
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_CalculateElapsed_should_return_correct_elapsed_time
+  :line: 129
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_CalculateElapsed_should_handle_overflow
+  :line: 138
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_CalculateRemaining_should_return_correct_remaining_time
+  :line: 147
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_CalculateRemaining_should_return_zero_when_timeout
+  :line: 157
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_should_work_with_uart_timeout_scenario
+  :line: 171
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_should_handle_multiple_operations
+  :line: 187
+  :message: ''
+  :unity_test_time: 0
+- :test: test_TIME_should_handle_edge_cases
+  :line: 205
+  :message: ''
+  :unity_test_time: 0
+:failures: []
+:ignores: []
+:counts:
+  :total: 17
+  :passed: 17
+  :failed: 0
+  :ignored: 0
+:stdout:
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1000 ms'
+- 'Mock TIME: GetCurrentMs() = 1000 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1000 ms'
+- 'Mock TIME: Advanced time by 500 ms (now: 1500 ms)'
+- 'Mock TIME: GetCurrentMs() = 1500 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1000 ms'
+- 'Mock TIME: DelayMs(300) - time advanced to 1300 ms'
+- 'Mock TIME: GetCurrentMs() = 1300 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1200 ms'
+- 'Mock TIME: GetCurrentMs() = 1200 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1600 ms'
+- 'Mock TIME: GetCurrentMs() = 1600 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1500 ms'
+- 'Mock TIME: GetCurrentMs() = 1500 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 5000 ms'
+- 'Mock TIME: GetCurrentMs() = 5000 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1000 ms'
+- 'Mock TIME: Advanced time by 750 ms (now: 1750 ms)'
+- 'Mock TIME: GetCurrentMs() = 1750 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1000 ms'
+- 'Mock TIME: Advanced time by 0 ms (now: 1000 ms)'
+- 'Mock TIME: GetCurrentMs() = 1000 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 5000 ms'
+- 'Mock TIME: Advanced time by 1000 ms (now: 6000 ms)'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: GetCurrentMs() = 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1500 ms'
+- 'Mock TIME: GetCurrentMs() = 1500 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 100 ms'
+- 'Mock TIME: GetCurrentMs() = 100 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1300 ms'
+- 'Mock TIME: GetCurrentMs() = 1300 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1600 ms'
+- 'Mock TIME: GetCurrentMs() = 1600 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: GetCurrentMs() = 0 ms'
+- 'Mock TIME: Advanced time by 3000 ms (now: 3000 ms)'
+- 'Mock TIME: GetCurrentMs() = 3000 ms'
+- 'Mock TIME: GetCurrentMs() = 3000 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 1000 ms'
+- 'Mock TIME: GetCurrentMs() = 1000 ms'
+- 'Mock TIME: Advanced time by 100 ms (now: 1100 ms)'
+- 'Mock TIME: GetCurrentMs() = 1100 ms'
+- 'Mock TIME: Advanced time by 200 ms (now: 1300 ms)'
+- 'Mock TIME: GetCurrentMs() = 1300 ms'
+- 'Mock TIME: GetCurrentMs() = 1300 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+- 'Mock TIME: Set current time to 0 ms'
+- 'Mock TIME: GetCurrentMs() = 0 ms'
+- 'Mock TIME: Advanced time by 1 ms (now: 1 ms)'
+- 'Mock TIME: GetCurrentMs() = 1 ms'
+- 'Mock TIME: Set current time to 4294967295 ms'
+- 'Mock TIME: GetCurrentMs() = 4294967295 ms'
+- 'Mock TIME: Advanced time by 1 ms (now: 0 ms)'
+- 'Mock TIME: GetCurrentMs() = 0 ms'
+- 'Mock TIME: Reset to 0 ms'
+:time: 2.0312109000005876

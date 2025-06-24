@@ -1,0 +1,67 @@
+---
+:source:
+  :file: test/test_ResponseHandler.c
+  :dirname: test
+  :basename: test_ResponseHandler.c
+:successes:
+- :test: test_is_response_ok_should_return_true_for_OK
+  :line: 20
+  :message: ''
+  :unity_test_time: 0
+- :test: test_is_response_ok_should_return_false_for_ERROR
+  :line: 25
+  :message: ''
+  :unity_test_time: 0
+- :test: test_is_response_ok_should_return_false_for_empty_string
+  :line: 30
+  :message: ''
+  :unity_test_time: 0
+- :test: test_is_response_ok_should_return_true_for_OK_with_newline
+  :line: 35
+  :message: ''
+  :unity_test_time: 0
+- :test: test_ResponseHandler_ParseSendResponse_should_return_TIMEOUT_for_TIMEOUT
+  :line: 40
+  :message: ''
+  :unity_test_time: 0
+- :test: test_ResponseHandler_ParseSendResponse_should_return_UNKNOWN_for_unknown_response
+  :line: 45
+  :message: ''
+  :unity_test_time: 0
+- :test: test_ResponseHandler_ParseSendResponse_should_return_UNKNOWN_for_NULL
+  :line: 50
+  :message: ''
+  :unity_test_time: 0
+- :test: test_ResponseHandler_ParseSendResponse_should_return_UNKNOWN_for_empty_string
+  :line: 55
+  :message: ''
+  :unity_test_time: 0
+- :test: test_ResponseHandler_ParseSendResponse_should_return_OK_for_SEND_CONFIRMED_OK
+  :line: 60
+  :message: ''
+  :unity_test_time: 0
+- :test: test_ResponseHandler_ParseSendResponse_should_return_ERROR_for_SEND_CONFIRMED_FAILED
+  :line: 65
+  :message: ''
+  :unity_test_time: 0
+- :test: test_ResponseHandler_ParseSendResponse_should_return_ERROR_for_SEND_CONFIRMED_FAILED_without_number
+  :line: 70
+  :message: ''
+  :unity_test_time: 0
+- :test: test_is_join_response_ok_should_return_true_for_JOINED
+  :line: 75
+  :message: ''
+  :unity_test_time: 0
+- :test: test_is_join_response_ok_should_return_false_for_other_responses
+  :line: 80
+  :message: ''
+  :unity_test_time: 0
+:failures: []
+:ignores: []
+:counts:
+  :total: 13
+  :passed: 13
+  :failed: 0
+  :ignored: 0
+:stdout: []
+:time: 2.06015060000027
