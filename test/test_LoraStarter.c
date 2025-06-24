@@ -24,11 +24,12 @@ uint32_t TIME_GetCurrentMs(void) {
 #include "mock_uart.h"
 #include "mock_CommandSender.h"
 #include "mock_ResponseHandler.h"
-
 #include "LoraStarter.h"
+#include "mock_logger.h"
 
 void setUp(void)
 {
+    LOGGER_SendWithLevel_IgnoreAndReturn(LOGGER_STATUS_OK);
 }
 
 void tearDown(void)
