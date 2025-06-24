@@ -90,23 +90,25 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
             break;
         case LORA_STATE_JOIN_RETRY:
             {
-                // 지수 백오프 적용: 1초, 2초, 4초, 8초, 16초... (최대 60초)
                 uint32_t current_time = TIME_GetCurrentMs();
+                printf("DEBUG: JOIN_RETRY - last_retry_time=%lu, current_time=%lu, retry_delay_ms=%lu\n", 
+                       ctx->last_retry_time, current_time, ctx->retry_delay_ms);
                 
-                // 첫 번째 재시도이거나 지연 시간이 지났으면 재시도
-                if (ctx->last_retry_time == 0 || 
-                    (current_time - ctx->last_retry_time) >= ctx->retry_delay_ms) {
-                    
-                    // 지수 백오프 계산 (최대 60초로 제한)
-                    ctx->retry_delay_ms = 1000 * (1 << ctx->error_count);
-                    if (ctx->retry_delay_ms > 60000) {
-                        ctx->retry_delay_ms = 60000; // 최대 60초
-                    }
-                    
+                if (ctx->last_retry_time == 0) {
+                    // 첫 재시도: 바로 SEND_JOIN
+                    printf("DEBUG: JOIN_RETRY - Branch 1: first retry\n");
                     ctx->last_retry_time = current_time;
                     ctx->state = LORA_STATE_SEND_JOIN;
+                } else if ((current_time - ctx->last_retry_time) >= ctx->retry_delay_ms) {
+                    // 지연 시간이 지났으면 SEND_JOIN
+                    printf("DEBUG: JOIN_RETRY - Branch 2: delay passed\n");
+                    ctx->last_retry_time = current_time;
+                    ctx->state = LORA_STATE_SEND_JOIN;
+                } else {
+                    // 아직 지연 시간이 지나지 않았다면 상태 유지
+                    printf("DEBUG: JOIN_RETRY - Branch 3: delay not passed yet\n");
+                    // 아무것도 하지 않음
                 }
-                // 아직 지연 시간이 지나지 않았으면 대기 상태 유지
             }
             break;
         case LORA_STATE_DONE:

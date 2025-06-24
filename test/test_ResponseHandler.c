@@ -84,4 +84,63 @@ void test_is_join_response_ok_should_return_false_for_other_responses(void)
     TEST_ASSERT_FALSE(is_join_response_ok(""));
 }
 
+void test_is_response_ok_should_return_false_for_NULL(void)
+{
+    TEST_ASSERT_FALSE(is_response_ok(NULL));
+}
+
+void test_is_response_ok_should_return_false_for_partial_match(void)
+{
+    TEST_ASSERT_FALSE(is_response_ok("OK_EXTRA"));
+    TEST_ASSERT_FALSE(is_response_ok("PREFIX_OK"));
+    TEST_ASSERT_FALSE(is_response_ok("OK_SUFFIX"));
+}
+
+void test_is_response_ok_should_return_false_for_lowercase(void)
+{
+    TEST_ASSERT_FALSE(is_response_ok("ok"));
+    TEST_ASSERT_FALSE(is_response_ok("Ok"));
+    TEST_ASSERT_FALSE(is_response_ok("oK"));
+}
+
+void test_is_response_ok_should_return_false_for_whitespace(void)
+{
+    TEST_ASSERT_FALSE(is_response_ok(" OK"));
+    TEST_ASSERT_FALSE(is_response_ok("OK "));
+    TEST_ASSERT_FALSE(is_response_ok(" OK "));
+}
+
+void test_is_join_response_ok_should_return_false_for_NULL(void)
+{
+    TEST_ASSERT_FALSE(is_join_response_ok(NULL));
+}
+
+void test_is_join_response_ok_should_return_false_for_partial_match(void)
+{
+    TEST_ASSERT_FALSE(is_join_response_ok("+EVT:JOINED_EXTRA"));
+    TEST_ASSERT_FALSE(is_join_response_ok("PREFIX_+EVT:JOINED"));
+    TEST_ASSERT_FALSE(is_join_response_ok("+EVT:JOINED_SUFFIX"));
+}
+
+void test_is_join_response_ok_should_return_false_for_lowercase(void)
+{
+    TEST_ASSERT_FALSE(is_join_response_ok("+evt:joined"));
+    TEST_ASSERT_FALSE(is_join_response_ok("+EVT:joined"));
+    TEST_ASSERT_FALSE(is_join_response_ok("+evt:JOINED"));
+}
+
+void test_ResponseHandler_ParseSendResponse_should_return_UNKNOWN_for_unexpected_format(void)
+{
+    TEST_ASSERT_EQUAL(RESPONSE_UNKNOWN, ResponseHandler_ParseSendResponse("+EVT:UNKNOWN_EVENT"));
+    TEST_ASSERT_EQUAL(RESPONSE_UNKNOWN, ResponseHandler_ParseSendResponse("SOME_OTHER_RESPONSE"));
+    TEST_ASSERT_EQUAL(RESPONSE_UNKNOWN, ResponseHandler_ParseSendResponse("+EVT:DIFFERENT_EVENT"));
+}
+
+void test_ResponseHandler_ParseSendResponse_should_return_ERROR_for_SEND_CONFIRMED_FAILED_with_different_number(void)
+{
+    TEST_ASSERT_EQUAL(RESPONSE_ERROR, ResponseHandler_ParseSendResponse("+EVT:SEND_CONFIRMED_FAILED(1)"));
+    TEST_ASSERT_EQUAL(RESPONSE_ERROR, ResponseHandler_ParseSendResponse("+EVT:SEND_CONFIRMED_FAILED(10)"));
+    TEST_ASSERT_EQUAL(RESPONSE_ERROR, ResponseHandler_ParseSendResponse("+EVT:SEND_CONFIRMED_FAILED(999)"));
+}
+
 #endif // TEST

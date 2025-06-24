@@ -19,4 +19,10 @@ void test_CommandSender_Send_should_send_AT_command_to_UART(void)
     CommandSender_Send("AT+NWM=1");
 }
 
+void test_CommandSender_Send_should_not_call_UART_Send_when_command_is_NULL(void)
+{
+    // UART_Send should not be called when command is NULL
+    CommandSender_Send(NULL);
+}
+
 #endif // TEST
