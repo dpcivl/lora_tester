@@ -123,12 +123,12 @@ static void run_test(UnityTestFunction func, const char* name, UNITY_LINE_TYPE l
   }
 #endif
   UnityBegin("test_LoraStarter.c");
-  run_test(test_LoraStarter_ConnectUART_should_call_UART_Connect, "test_LoraStarter_ConnectUART_should_call_UART_Connect", 18);
-  run_test(test_LoraStarter_should_send_commands_in_sequence_and_wait_for_OK, "test_LoraStarter_should_send_commands_in_sequence_and_wait_for_OK", 24);
-  run_test(test_LoraStarter_should_start_periodic_send_after_JOIN_OK, "test_LoraStarter_should_start_periodic_send_after_JOIN_OK", 90);
-  run_test(test_LoraStarter_should_continue_periodic_send_on_OK_response, "test_LoraStarter_should_continue_periodic_send_on_OK_response", 135);
-  run_test(test_LoraStarter_should_continue_periodic_send_on_TIMEOUT_response, "test_LoraStarter_should_continue_periodic_send_on_TIMEOUT_response", 164);
-  run_test(test_LoraStarter_should_retry_JOIN_on_ERROR_response, "test_LoraStarter_should_retry_JOIN_on_ERROR_response", 193);
+  run_test(test_LoraStarter_ConnectUART_should_call_UART_Connect, "test_LoraStarter_ConnectUART_should_call_UART_Connect", 23);
+  run_test(test_LoraStarter_should_send_commands_in_sequence_and_wait_for_OK, "test_LoraStarter_should_send_commands_in_sequence_and_wait_for_OK", 29);
+  run_test(test_LoraStarter_should_start_periodic_send_after_JOIN_OK, "test_LoraStarter_should_start_periodic_send_after_JOIN_OK", 95);
+  run_test(test_LoraStarter_should_continue_periodic_send_on_OK_response, "test_LoraStarter_should_continue_periodic_send_on_OK_response", 145);
+  run_test(test_LoraStarter_should_continue_periodic_send_on_TIMEOUT_response, "test_LoraStarter_should_continue_periodic_send_on_TIMEOUT_response", 179);
+  run_test(test_LoraStarter_should_retry_JOIN_on_ERROR_response, "test_LoraStarter_should_retry_JOIN_on_ERROR_response", 213);
 
   CMock_Guts_MemFreeFinal();
   return UNITY_END();

@@ -167,4 +167,4 @@
 - 'Mock TIME: Advanced time by 1 ms (now: 0 ms)'
 - 'Mock TIME: GetCurrentMs() = 0 ms'
 - 'Mock TIME: Reset to 0 ms'
-:time: 2.0312109000005876
+:time: 0.18945040000107838

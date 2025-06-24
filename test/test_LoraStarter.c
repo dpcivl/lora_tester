@@ -1,3 +1,8 @@
+#include <stdint.h>
+// [임시 MOCK] 테스트 환경에서 TIME_GetCurrentMs 링크 오류 방지용. 실제 시간 흐름 테스트 필요시 개선 필요!
+uint32_t TIME_GetCurrentMs(void) { return 0; }
+#include "time_mock.c"
+
 #ifdef TEST
 
 #include "unity.h"
@@ -97,7 +102,12 @@ void test_LoraStarter_should_start_periodic_send_after_JOIN_OK(void)
         .commands = commands,
         .num_commands = 2,
         .send_interval_ms = 1000,  // 1초 주기
-        .send_count = 0
+        .send_count = 0,
+        .send_message = "Hello",
+        .error_count = 0,
+        .max_retry_count = 0,  // 무제한 재시도
+        .last_retry_time = 0,
+        .retry_delay_ms = 1000
     };
 
     // 1. INIT 상태에서 첫 번째 커맨드 전송
@@ -142,7 +152,12 @@ void test_LoraStarter_should_continue_periodic_send_on_OK_response(void)
         .commands = commands,
         .num_commands = 1,
         .send_interval_ms = 1000,
-        .send_count = 0
+        .send_count = 0,
+        .send_message = "Hello",
+        .error_count = 0,
+        .max_retry_count = 0,  // 무제한 재시도
+        .last_retry_time = 0,
+        .retry_delay_ms = 1000
     };
 
     // 1. 첫 번째 send 명령어 전송
@@ -171,7 +186,12 @@ void test_LoraStarter_should_continue_periodic_send_on_TIMEOUT_response(void)
         .commands = commands,
         .num_commands = 1,
         .send_interval_ms = 1000,
-        .send_count = 0
+        .send_count = 0,
+        .send_message = "Hello",
+        .error_count = 0,
+        .max_retry_count = 0,  // 무제한 재시도
+        .last_retry_time = 0,
+        .retry_delay_ms = 1000
     };
 
     // 1. 첫 번째 send 명령어 전송
@@ -200,7 +220,12 @@ void test_LoraStarter_should_retry_JOIN_on_ERROR_response(void)
         .commands = commands,
         .num_commands = 1,
         .send_interval_ms = 1000,
-        .send_count = 0
+        .send_count = 0,
+        .send_message = "Hello",
+        .error_count = 0,
+        .max_retry_count = 0,  // 무제한 재시도
+        .last_retry_time = 0,
+        .retry_delay_ms = 1000
     };
 
     // 1. 첫 번째 send 명령어 전송

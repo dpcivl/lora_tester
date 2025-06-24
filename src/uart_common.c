@@ -84,7 +84,7 @@ UartStatus UART_ReceiveWithTimeout(char* buffer, int buffer_size,
         }
         // UART_STATUS_TIMEOUT인 경우 계속 대기
         // CPU 사용률을 줄이기 위해 짧은 지연 추가
-        TIME_DelayMs(1);  // 1ms 지연
+        TIME_DelayMs(10);  // 10ms 지연 (1ms에서 개선)
     }
     
     // 타임아웃 발생

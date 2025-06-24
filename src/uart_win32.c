@@ -88,6 +88,11 @@ UartStatus UART_Platform_Receive(char* buffer, int buffer_size, int* bytes_recei
         return UART_STATUS_ERROR;
     }
     
+    // 버퍼 오버플로우 방지
+    if (bytes_read >= (DWORD)buffer_size) {
+        bytes_read = buffer_size - 1;
+    }
+    
     buffer[bytes_read] = '\0';  // NULL 종료
     *bytes_received = bytes_read;
     

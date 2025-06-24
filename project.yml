@@ -105,6 +105,7 @@
     - src/**
   :support:
     - test/support
+    - src/time_mock.c
   :libraries: []
 
 # 명시적으로 소스 파일들을 지정하여 빌드에 포함
@@ -117,6 +118,9 @@
     - src/CommandSender.c
     - src/ResponseHandler.c
     - src/LoraStarter.c
+  :test_support:
+    # - src/time_common.c
+    # - src/time_mock.c
 
 # Compilation symbols to be injected into builds
 # See documentation for advanced options:
