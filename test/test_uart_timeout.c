@@ -3,6 +3,7 @@
 #include "unity.h"
 #include "uart.h"
 #include "time.h"
+#include "mock_logger.h"
 #include "../src/uart_common.c"
 #include "../src/time_common.c"
 #include "../src/uart_mock.c"
@@ -10,6 +11,7 @@
 
 void setUp(void)
 {
+    LOGGER_SendWithLevel_IgnoreAndReturn(LOGGER_STATUS_OK);
     UART_Mock_Reset();
     TIME_Mock_Reset();
 }

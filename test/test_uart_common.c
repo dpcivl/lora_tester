@@ -2,9 +2,11 @@
 
 #include "unity.h"
 #include "mock_uart.h"
+#include "mock_logger.h"
 
 void setUp(void)
 {
+    LOGGER_SendWithLevel_IgnoreAndReturn(LOGGER_STATUS_OK);
     // UART_Mock_Reset();
 }
 
