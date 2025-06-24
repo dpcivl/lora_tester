@@ -1,12 +1,14 @@
 #ifdef TEST
 
 #include "unity.h"
+#include "mock_logger.h"
 #include <stdbool.h>
 
 #include "ResponseHandler.h"
 
 void setUp(void)
 {
+    LOGGER_SendWithLevel_IgnoreAndReturn(LOGGER_STATUS_OK);
 }
 
 void tearDown(void)
