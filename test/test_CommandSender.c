@@ -2,11 +2,13 @@
 
 #include "unity.h"
 #include "mock_uart.h"
+#include "mock_logger.h"
 
 #include "CommandSender.h"
 
 void setUp(void)
 {
+    LOGGER_SendWithLevel_IgnoreAndReturn(LOGGER_STATUS_OK);
 }
 
 void tearDown(void)
