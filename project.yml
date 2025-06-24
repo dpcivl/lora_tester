@@ -99,6 +99,7 @@
   :test:
     - +:test/**
     - -:test/support
+    - +:test/test_logger.c
   :source:
     - src/**
   :include:
@@ -118,6 +119,8 @@
     - src/CommandSender.c
     - src/ResponseHandler.c
     - src/LoraStarter.c
+    - src/logger.c
+    - src/logger_platform.c
   :test_support: []
 
 # Compilation symbols to be injected into builds
