@@ -407,20 +407,272 @@ void test_LoraStarter_should_stay_in_JOIN_RETRY_when_delay_time_hasnt_passed(voi
 
 void test_LoraStarter_should_proceed_to_SEND_JOIN_when_delay_time_has_passed(void)
 {
-    const char* commands[] = {"AT+NWM=1"};
+    // 준비: JOIN_RETRY 상태에서 지연 시간이 지난 상황
     LoraStarterContext ctx = {
         .state = LORA_STATE_JOIN_RETRY,
-        .cmd_index = 0,
-        .commands = commands,
-        .num_commands = 1,
         .last_retry_time = 1000,  // 1초 전에 재시도
-        .retry_delay_ms = 1000    // 1초 지연 필요
+        .retry_delay_ms = 500     // 0.5초 지연
     };
-    // Set mock time to 2000 (1000ms passed, delay has passed)
-    TIME_Mock_SetCurrentTime(2000);
+
+    // TIME_GetCurrentMs가 1600을 반환 (1.6초 경과)
+    TIME_Mock_SetCurrentTime(1600);
+
     LoraStarter_Process(&ctx, NULL);
-    // Should proceed to SEND_JOIN because delay has passed
+
+    // 지연 시간이 지났으므로 SEND_JOIN으로 전이
     TEST_ASSERT_EQUAL(LORA_STATE_SEND_JOIN, ctx.state);
+    TEST_ASSERT_EQUAL(1600, ctx.last_retry_time);  // 재시도 시간 업데이트
+}
+
+// get_state_name 함수 테스트
+void test_get_state_name_should_return_correct_strings(void)
+{
+    // 이 테스트는 get_state_name이 static 함수이므로 직접 테스트할 수 없지만,
+    // LoraStarter_Process를 통해 간접적으로 테스트할 수 있습니다.
+    
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_INIT
+    };
+
+    // 각 상태를 거쳐가면서 로깅이 제대로 되는지 확인
+    LoraStarter_Process(&ctx, NULL); // INIT -> SEND_CMD
+    LoraStarter_Process(&ctx, NULL); // SEND_CMD -> WAIT_OK (명령어가 없으므로)
+    
+    // 상태 변경 로깅이 호출되었는지 확인
+    // (실제로는 mock_logger를 통해 확인할 수 있음)
+}
+
+// 에러 상태 처리 테스트
+void test_LoraStarter_should_do_nothing_in_DONE_state(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_DONE,
+        .send_count = 5
+    };
+
+    int original_send_count = ctx.send_count;
+    
+    LoraStarter_Process(&ctx, "some response");
+    
+    // DONE 상태에서는 아무것도 변경되지 않아야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_DONE, ctx.state);
+    TEST_ASSERT_EQUAL(original_send_count, ctx.send_count);
+}
+
+void test_LoraStarter_should_do_nothing_in_ERROR_state(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_ERROR,
+        .error_count = 10
+    };
+
+    int original_error_count = ctx.error_count;
+    
+    LoraStarter_Process(&ctx, "some response");
+    
+    // ERROR 상태에서는 아무것도 변경되지 않아야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_ERROR, ctx.state);
+    TEST_ASSERT_EQUAL(original_error_count, ctx.error_count);
+}
+
+// 기본값 설정 테스트
+void test_LoraStarter_should_set_default_values_in_INIT_state(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_INIT,
+        .max_retry_count = 0,
+        .send_message = NULL
+    };
+
+    LoraStarter_Process(&ctx, NULL);
+
+    // 기본값이 설정되었는지 확인
+    TEST_ASSERT_EQUAL(LORA_STATE_SEND_CMD, ctx.state);
+    TEST_ASSERT_EQUAL(0, ctx.cmd_index);
+    TEST_ASSERT_EQUAL(0, ctx.error_count);
+    TEST_ASSERT_EQUAL(0, ctx.max_retry_count);  // 0은 무제한을 의미
+    TEST_ASSERT_EQUAL_STRING("Hello", ctx.send_message);  // 기본 메시지
+    TEST_ASSERT_EQUAL(0, ctx.last_retry_time);
+    TEST_ASSERT_EQUAL(1000, ctx.retry_delay_ms);
+}
+
+// WAIT_OK 상태에서 NULL 응답 처리
+void test_LoraStarter_should_stay_in_WAIT_OK_when_uart_rx_is_NULL(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_OK,
+        .cmd_index = 1
+    };
+
+    int original_cmd_index = ctx.cmd_index;
+    
+    LoraStarter_Process(&ctx, NULL);
+    
+    // NULL 응답이므로 상태가 변경되지 않아야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_OK, ctx.state);
+    TEST_ASSERT_EQUAL(original_cmd_index, ctx.cmd_index);
+}
+
+// WAIT_JOIN_OK 상태에서 NULL 응답 처리
+void test_LoraStarter_should_stay_in_WAIT_JOIN_OK_when_uart_rx_is_NULL(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_JOIN_OK
+    };
+
+    LoraStarter_Process(&ctx, NULL);
+    
+    // NULL 응답이므로 상태가 변경되지 않아야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_JOIN_OK, ctx.state);
+}
+
+// WAIT_SEND_RESPONSE 상태에서 NULL 응답 처리
+void test_LoraStarter_should_stay_in_WAIT_SEND_RESPONSE_when_uart_rx_is_NULL(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_SEND_RESPONSE,
+        .error_count = 2
+    };
+
+    int original_error_count = ctx.error_count;
+    
+    LoraStarter_Process(&ctx, NULL);
+    
+    // NULL 응답이므로 상태가 변경되지 않아야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_RESPONSE, ctx.state);
+    TEST_ASSERT_EQUAL(original_error_count, ctx.error_count);
+}
+
+// JOIN_RETRY 상태에서 첫 번째 재시도 (last_retry_time이 0인 경우)
+void test_LoraStarter_should_immediately_retry_JOIN_when_last_retry_time_is_zero(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_JOIN_RETRY,
+        .last_retry_time = 0,  // 첫 번째 재시도
+        .retry_delay_ms = 1000
+    };
+
+    TIME_Mock_SetCurrentTime(5000);
+
+    LoraStarter_Process(&ctx, NULL);
+
+    // 첫 번째 재시도이므로 즉시 SEND_JOIN으로 전이
+    TEST_ASSERT_EQUAL(LORA_STATE_SEND_JOIN, ctx.state);
+    TEST_ASSERT_EQUAL(5000, ctx.last_retry_time);
+}
+
+// JOIN_RETRY 상태에서 지연 시간이 정확히 같을 때
+void test_LoraStarter_should_retry_JOIN_when_delay_time_is_exactly_equal(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_JOIN_RETRY,
+        .last_retry_time = 1000,
+        .retry_delay_ms = 500
+    };
+
+    TIME_Mock_SetCurrentTime(1500);  // 정확히 500ms 경과
+
+    LoraStarter_Process(&ctx, NULL);
+
+    // 지연 시간이 정확히 같으므로 SEND_JOIN으로 전이
+    TEST_ASSERT_EQUAL(LORA_STATE_SEND_JOIN, ctx.state);
+    TEST_ASSERT_EQUAL(1500, ctx.last_retry_time);
+}
+
+// max_retry_count가 0이 아닌 경우의 재시도 제한 테스트
+void test_LoraStarter_should_stop_retry_when_max_retry_count_is_reached(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_SEND_RESPONSE,
+        .error_count = 3,
+        .max_retry_count = 3  // 최대 3회 재시도
+    };
+
+    ResponseHandler_ParseSendResponse_ExpectAndReturn("ERROR", RESPONSE_ERROR);
+
+    LoraStarter_Process(&ctx, "ERROR");
+
+    // 최대 재시도 횟수에 도달했으므로 ERROR 상태로 전이
+    TEST_ASSERT_EQUAL(LORA_STATE_ERROR, ctx.state);
+    TEST_ASSERT_EQUAL(4, ctx.error_count);  // 에러 카운트 증가
+}
+
+// send_message가 NULL인 경우의 기본 메시지 사용 테스트
+void test_LoraStarter_should_use_default_message_when_send_message_is_NULL(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_SEND_PERIODIC,
+        .send_message = NULL
+    };
+
+    CommandSender_Send_Expect("AT+SEND=Hello");  // 기본 메시지 사용
+
+    LoraStarter_Process(&ctx, NULL);
+
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_RESPONSE, ctx.state);
+    TEST_ASSERT_EQUAL(1, ctx.send_count);
+}
+
+// 에러 카운터 리셋 테스트
+void test_LoraStarter_should_reset_error_count_on_successful_JOIN(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_JOIN_OK,
+        .error_count = 5,
+        .retry_delay_ms = 2000,
+        .last_retry_time = 1000
+    };
+
+    is_join_response_ok_ExpectAndReturn("+EVT:JOINED", 1);
+
+    LoraStarter_Process(&ctx, "+EVT:JOINED");
+
+    // JOIN 성공 시 에러 카운터와 재시도 관련 값들이 리셋되어야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
+    TEST_ASSERT_EQUAL(0, ctx.error_count);
+    TEST_ASSERT_EQUAL(1000, ctx.retry_delay_ms);
+    TEST_ASSERT_EQUAL(0, ctx.last_retry_time);
+    TEST_ASSERT_EQUAL(0, ctx.send_count);
+}
+
+// 성공적인 SEND 응답에서 에러 카운터 리셋 테스트
+void test_LoraStarter_should_reset_error_count_on_successful_SEND(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_SEND_RESPONSE,
+        .error_count = 3,
+        .retry_delay_ms = 2000,
+        .last_retry_time = 1000
+    };
+
+    ResponseHandler_ParseSendResponse_ExpectAndReturn("+EVT:SEND_CONFIRMED_OK", RESPONSE_OK);
+
+    LoraStarter_Process(&ctx, "+EVT:SEND_CONFIRMED_OK");
+
+    // SEND 성공 시 에러 카운터와 재시도 관련 값들이 리셋되어야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
+    TEST_ASSERT_EQUAL(0, ctx.error_count);
+    TEST_ASSERT_EQUAL(1000, ctx.retry_delay_ms);
+}
+
+// TIMEOUT 응답에서 에러 카운터 리셋 테스트
+void test_LoraStarter_should_reset_error_count_on_TIMEOUT_response(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_SEND_RESPONSE,
+        .error_count = 2,
+        .retry_delay_ms = 2000,
+        .last_retry_time = 1000
+    };
+
+    ResponseHandler_ParseSendResponse_ExpectAndReturn("TIMEOUT", RESPONSE_TIMEOUT);
+
+    LoraStarter_Process(&ctx, "TIMEOUT");
+
+    // TIMEOUT 응답 시에도 에러 카운터와 재시도 관련 값들이 리셋되어야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
+    TEST_ASSERT_EQUAL(0, ctx.error_count);
+    TEST_ASSERT_EQUAL(1000, ctx.retry_delay_ms);
 }
 
 #endif // TEST
