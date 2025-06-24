@@ -230,4 +230,72 @@ mock_*.h
 
 # Test runner files (if generated separately)
 *_runner.c
-*_runner.h 
+*_runner.h
+
+# =========================================================================
+# STM32/Embedded Project Artifacts
+# =========================================================================
+
+# STM32CubeIDE
+stm32/.settings/
+stm32/.mxproject
+stm32/.cproject
+stm32/.project
+stm32/Debug/
+stm32/Release/
+stm32/STM32F7*/*/Debug/
+stm32/STM32F7*/*/Release/
+*.launch
+*.uvopt*
+*.uvproj*
+*.dep
+*.elf
+*.map
+*.lst
+*.hex
+*.bin
+*.srec
+*.d
+*.o
+*.su
+*.idb
+*.bak
+*.log
+*.tmp
+*.user
+*.swp
+*.swo
+*.db
+*.plg
+*.uvgui.*
+
+# STM32CubeMX
+stm32/*_ioconfig.xml
+stm32/*ioc-backup*
+
+# Keil MDK
+stm32/*.uvoptx
+stm32/*.uvprojx
+stm32/Objects/
+stm32/List/
+
+# IAR EWARM
+stm32/Settings/
+stm32/Debug/
+stm32/Release/
+
+# 기타
+stm32/*.exe
+stm32/*.zip
+stm32/*.tar.gz
+stm32/*.7z
+stm32/*.bak
+stm32/*.old
+stm32/*.orig
+stm32/*.swp
+stm32/*.swo
+stm32/*.db
+stm32/*.plg
+stm32/*.user
+stm32/*.log
+stm32/*.tmp 
