@@ -156,7 +156,6 @@ void StartDefaultTask(void const * argument);
   */
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -207,19 +206,7 @@ int main(void)
   MX_USART6_UART_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-  UART_Connect(NULL);
 
-  // 1. AT 커맨드 송신
-  UART_Send("AT\r\n");
-  // 2. OK 응답 수신
-  char rx_buffer[100] = {0};
-  int bytes_received = 0;
-  if (UART_Receive(rx_buffer, sizeof(rx_buffer), &bytes_received) == UART_STATUS_OK) {
-	  if (strstr(rx_buffer, "OK") != NULL) {
-		  // OK 응답이 포함되어 있으면 성공
-		  // (LED 점등, 디버그 출력 등 원하는 동작)
-	  }
-  }
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -251,7 +238,7 @@ int main(void)
   osKernelStart();
 
   /* We should never get here as control is now taken by the scheduler */
-
+  
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -1669,41 +1656,271 @@ void StartDefaultTask(void const * argument)
   // Logger 초기화 (STM32에서는 단순히 연결 상태 설정)
   LOGGER_Connect("STM32", 0);
   
-  // 간단한 로그 테스트
-  LOG_INFO("=== STM32F746G-DISCO Log Test Started ===");
-  LOG_DEBUG("This is a DEBUG message");
-  LOG_INFO("This is an INFO message");
-  LOG_WARN("This is a WARNING message");
-  LOG_ERROR("This is an ERROR message");
-  LOG_INFO("=== Log Test Completed ===");
+  LOG_INFO("=== STM32F746G-DISCO LoRa UART Test Started ===");
+  LOG_INFO("System Clock: %lu MHz", SystemCoreClock / 1000000);
+  LOG_INFO("UART6 Configuration: 115200 baud, 8N1");
+  LOG_INFO("Test Objective: Send AT command once and check for OK response");
   
-  uint32_t counter = 0;
-  uint32_t last_log_time = 0;
+  // UART 연결 테스트
+  LOG_INFO("[STEP 1] Testing UART6 connection to LoRa module...");
+  LOG_INFO("UART6 Pins: PC6(TX) -> LoRa RX, PC7(RX) <- LoRa TX");
   
-  /* Infinite loop */
-  for(;;)
-  {
-    uint32_t current_time = HAL_GetTick();
+  UartStatus uart_status = UART_Connect("UART6");
+  if (uart_status == UART_STATUS_OK) {
+    LOG_INFO("[STEP 1] ✓ UART6 connection SUCCESS");
+  } else {
+    LOG_ERROR("[STEP 1] ✗ UART6 connection FAILED (status: %d)", uart_status);
+    LOG_ERROR("Program terminated due to UART connection failure");
+    goto idle_loop;
+  }
+  
+  // UART 연결 상태 확인
+  if (UART_IsConnected()) {
+    LOG_INFO("[STEP 1] ✓ UART6 is CONNECTED and ready");
+  } else {
+    LOG_ERROR("[STEP 1] ✗ UART6 is NOT CONNECTED");
+    LOG_ERROR("Program terminated due to UART connection failure");
+    goto idle_loop;
+  }
+  
+  osDelay(1000); // 1초 대기 (안정화)
+  
+  // === 하드웨어 진단 단계 추가 ===
+  LOG_INFO("[DIAGNOSIS] === UART Hardware Diagnosis ===");
+  LOG_INFO("[DIAGNOSIS] Testing UART with different scenarios...");
+  
+  // 진단 1: 루프백 테스트 (PC6-PC7 연결 필요)
+  LOG_INFO("[DIAGNOSIS] Test 1: Loopback Test");
+  LOG_INFO("[DIAGNOSIS] Please connect PC6 to PC7 for loopback test");
+  LOG_INFO("[DIAGNOSIS] If no loopback: Disconnect LoRa and check with actual module");
+  
+  const char* loopback_cmd = "LOOP\r\n";
+  LOG_INFO("[DIAGNOSIS] Sending loopback test: '%s'", loopback_cmd);
+  
+  UartStatus loop_send_status = UART_Send(loopback_cmd);
+  if (loop_send_status == UART_STATUS_OK) {
+    LOG_INFO("[DIAGNOSIS] ✓ Loopback command sent");
     
-    // 3초마다 로그 출력
-    if (current_time - last_log_time >= 3000) {
-      last_log_time = current_time;
-      counter++;
+    osDelay(500); // 500ms 대기
+    
+    char loop_buffer[256];
+    int loop_bytes = 0;
+    UartStatus loop_recv_status = UART_Receive(loop_buffer, sizeof(loop_buffer) - 1, &loop_bytes);
+    
+    if (loop_recv_status == UART_STATUS_OK && loop_bytes > 0) {
+      loop_buffer[loop_bytes] = '\0';
+      LOG_INFO("[DIAGNOSIS] ✓ Loopback received (%d bytes): '%s'", loop_bytes, loop_buffer);
       
-      LOG_INFO("[%lu] System running... Counter: %lu, Uptime: %lu ms", 
-               counter, counter, current_time);
-      
-      // 5번마다 다른 레벨 로그도 출력
-      if (counter % 5 == 0) {
-        LOG_WARN("Warning test message - Counter reached %lu", counter);
+      if (loop_bytes >= 6 && strncmp(loop_buffer, "LOOP", 4) == 0) {
+        LOG_INFO("[DIAGNOSIS] 🎉 UART Hardware WORKING - Full loopback success!");
+      } else if (loop_bytes == 1) {
+        LOG_WARN("[DIAGNOSIS] ⚠ Partial loopback - only 1 byte received");
+        LOG_WARN("[DIAGNOSIS] Same issue as LoRa - hardware timing problem");
+      } else {
+        LOG_INFO("[DIAGNOSIS] ✓ Loopback working but partial data");
       }
+    } else {
+      LOG_WARN("[DIAGNOSIS] ⚠ No loopback data - check PC6-PC7 connection");
+    }
+  }
+  
+  // 진단 2: 다른 명령어 테스트
+  LOG_INFO("[DIAGNOSIS] Test 2: Different Command Formats");
+  
+  const char* test_commands[] = {
+    "AT",           // AT without CRLF
+    "AT\r",         // AT with CR only  
+    "AT\n",         // AT with LF only
+    "AT+VER\r\n",   // Version command
+    "+++",          // Command mode (some modules)
+  };
+  
+  int num_test_commands = sizeof(test_commands) / sizeof(test_commands[0]);
+  
+  for (int i = 0; i < num_test_commands; i++) {
+    LOG_INFO("[DIAGNOSIS] Testing command %d: '%s'", i+1, test_commands[i]);
+    
+    UartStatus test_send_status = UART_Send(test_commands[i]);
+    if (test_send_status == UART_STATUS_OK) {
+      osDelay(1000); // 1초 대기
       
-      if (counter % 10 == 0) {
-        LOG_ERROR("Error test message - Counter reached %lu", counter);
+      char test_buffer[256];
+      int test_bytes = 0;
+      UartStatus test_recv_status = UART_Receive(test_buffer, sizeof(test_buffer) - 1, &test_bytes);
+      
+      if (test_recv_status == UART_STATUS_OK && test_bytes > 0) {
+        test_buffer[test_bytes] = '\0';
+        LOG_INFO("[DIAGNOSIS] ✓ Response to cmd %d (%d bytes): '%s'", i+1, test_bytes, test_buffer);
+      } else {
+        LOG_INFO("[DIAGNOSIS] ⚠ No response to cmd %d", i+1);
       }
     }
     
-    osDelay(100);  // 100ms 대기
+    osDelay(500); // 명령어 간 간격
+  }
+  
+  LOG_INFO("[DIAGNOSIS] === End of Hardware Diagnosis ===");
+  osDelay(2000); // 2초 대기
+  
+  // === 원래 AT 명령어 테스트 계속 ===
+  
+  // AT 명령어 전송
+  LOG_INFO("[STEP 2] Sending AT command to LoRa module...");
+  
+  const char* test_cmd = "AT\r\n";
+  LOG_INFO("[STEP 2] Command: '%s'", test_cmd);
+  
+  UartStatus send_status = UART_Send(test_cmd);
+  if (send_status == UART_STATUS_OK) {
+    LOG_INFO("[STEP 2] ✓ AT command sent successfully");
+  } else {
+    LOG_ERROR("[STEP 2] ✗ AT command send FAILED (status: %d)", send_status);
+    LOG_ERROR("Program terminated due to send failure");
+    goto idle_loop;
+  }
+  
+  // 응답 대기
+  LOG_INFO("[STEP 3] Waiting for LoRa module response...");
+  osDelay(1000); // 1초 대기 (응답 시간)
+  
+  // 응답 확인
+  char rx_buffer[256];
+  int bytes_received = 0;
+  
+  UartStatus recv_status = UART_Receive(rx_buffer, sizeof(rx_buffer) - 1, &bytes_received);
+  
+  if (recv_status == UART_STATUS_OK && bytes_received > 0) {
+    // 수신된 데이터를 null-terminate
+    rx_buffer[bytes_received] = '\0';
+    
+    LOG_INFO("[STEP 3] ✓ Response received (%d bytes)", bytes_received);
+    LOG_INFO("[STEP 3] Raw response: '%s'", rx_buffer);
+    
+    // 바이트별 분석 (디버깅용)
+    LOG_INFO("[STEP 3] Hex dump:");
+    for (int i = 0; i < bytes_received; i++) {
+      uint8_t byte = (uint8_t)rx_buffer[i];
+      char printable = (byte >= 32 && byte <= 126) ? byte : '.';
+      LOG_INFO("  [%d] = 0x%02X ('%c') %s", i, byte, printable,
+              (byte == 0x0D) ? "<CR>" : 
+              (byte == 0x0A) ? "<LF>" : 
+              (byte == 0x20) ? "<SPACE>" : "");
+    }
+    
+    // 부분적 응답 검사: 'O' 문자만 받은 경우 추가 수신 시도
+    if (bytes_received == 1 && rx_buffer[0] == 'O') {
+      LOG_INFO("[STEP 3] 🔍 Detected partial response 'O' - waiting for remaining data...");
+      
+      // 추가 수신 시도 (더 긴 타임아웃)
+      char additional_buffer[256];
+      int additional_bytes = 0;
+      int total_attempts = 0;
+      const int max_attempts = 5;
+      
+      while (total_attempts < max_attempts) {
+        total_attempts++;
+        LOG_INFO("[STEP 3] Additional receive attempt %d/%d...", total_attempts, max_attempts);
+        
+        osDelay(500); // 500ms 추가 대기
+        
+        UartStatus additional_status = UART_Receive(additional_buffer, sizeof(additional_buffer) - 1, &additional_bytes);
+        
+        if (additional_status == UART_STATUS_OK && additional_bytes > 0) {
+          additional_buffer[additional_bytes] = '\0';
+          LOG_INFO("[STEP 3] ✓ Additional data received (%d bytes): '%s'", additional_bytes, additional_buffer);
+          
+          // 기존 응답과 합치기
+          if (bytes_received + additional_bytes < sizeof(rx_buffer) - 1) {
+            memcpy(rx_buffer + bytes_received, additional_buffer, additional_bytes);
+            bytes_received += additional_bytes;
+            rx_buffer[bytes_received] = '\0';
+            
+            LOG_INFO("[STEP 3] ✓ Combined response (%d bytes): '%s'", bytes_received, rx_buffer);
+            
+            // 완전한 OK 응답인지 확인
+            extern bool is_response_ok(const char* response);
+            if (is_response_ok(rx_buffer)) {
+              LOG_INFO("[STEP 3] 🎉 Complete OK response found after %d attempts!", total_attempts);
+              break;
+            } else if (strstr(rx_buffer, "OK") != NULL) {
+              LOG_INFO("[STEP 3] ✓ OK pattern found in combined response");
+              break;
+            } else {
+              LOG_INFO("[STEP 3] Partial response continues, trying again...");
+            }
+          } else {
+            LOG_WARN("[STEP 3] ⚠ Buffer overflow prevented during response combination");
+            break;
+          }
+        } else {
+          LOG_INFO("[STEP 3] No additional data in attempt %d", total_attempts);
+        }
+      }
+      
+      if (total_attempts >= max_attempts) {
+        LOG_WARN("[STEP 3] ⚠ Max attempts reached, proceeding with partial response");
+      }
+    }
+    
+    // ResponseHandler를 사용하여 OK 응답 확인
+    extern bool is_response_ok(const char* response);
+    
+    if (is_response_ok(rx_buffer)) {
+      LOG_INFO("[RESULT] 🎉 SUCCESS: LoRa module responded with OK!");
+      LOG_INFO("[RESULT] ✓ Communication test PASSED");
+      LOG_INFO("[RESULT] ✓ LoRa module is ready for commands");
+    } else if (strstr(rx_buffer, "OK") != NULL) {
+      LOG_INFO("[RESULT] 🎉 SUCCESS: Found OK in response!");
+      LOG_INFO("[RESULT] ✓ Communication test PASSED");
+      LOG_INFO("[RESULT] ✓ LoRa module is ready for commands");
+    } else if (strstr(rx_buffer, "AT") != NULL) {
+      LOG_INFO("[RESULT] 📡 INFO: LoRa module echoed AT command");
+      LOG_INFO("[RESULT] ✓ Communication working (echo mode)");
+      LOG_WARN("[RESULT] ⚠ No explicit OK received, but communication confirmed");
+    } else if (strstr(rx_buffer, "ERROR") != NULL) {
+      LOG_WARN("[RESULT] ⚠ WARNING: LoRa module responded with ERROR");
+      LOG_WARN("[RESULT] Check LoRa module configuration");
+    } else if (bytes_received == 1 && rx_buffer[0] == 'O') {
+      LOG_WARN("[RESULT] ⚠ PARTIAL: Only 'O' received, likely incomplete OK response");
+      LOG_WARN("[RESULT] ✓ Communication working, but response may be incomplete");
+      LOG_WARN("[RESULT] Suggestions:");
+      LOG_WARN("  - LoRa module may need more time to respond");
+      LOG_WARN("  - Check LoRa module firmware/configuration");
+      LOG_WARN("  - Try different AT command format");
+    } else {
+      LOG_INFO("[RESULT] 📋 INFO: Unknown response pattern");
+      LOG_INFO("[RESULT] ✓ Communication working, but response format unexpected");
+    }
+    
+  } else if (recv_status == UART_STATUS_TIMEOUT) {
+    LOG_WARN("[STEP 3] ⚠ No response from LoRa module (TIMEOUT)");
+    LOG_WARN("[RESULT] ❌ FAILED: No response received");
+    LOG_WARN("[RESULT] Troubleshooting:");
+    LOG_WARN("  1. Check LoRa module power supply");
+    LOG_WARN("  2. Verify wiring: PC6(TX)->RX, PC7(RX)<-TX");
+    LOG_WARN("  3. Try different baud rates: 9600, 38400, 57600");
+    LOG_WARN("  4. Check if LoRa module requires wake-up sequence");
+    LOG_WARN("  5. For loopback test: Connect PC6 to PC7");
+  } else {
+    LOG_ERROR("[STEP 3] ✗ Response receive FAILED (status: %d)", recv_status);
+    LOG_ERROR("[RESULT] ❌ FAILED: Reception error");
+  }
+  
+  LOG_INFO("=== AT Command Test Completed ===");
+  LOG_INFO("Program will now enter idle mode");
+  LOG_INFO("Reset the board to run the test again");
+
+idle_loop:
+  /* Infinite idle loop */
+  LOG_INFO("Entering idle mode...");
+  uint32_t idle_counter = 0;
+  
+  for(;;)
+  {
+    // 30초마다 idle 상태 표시
+    osDelay(30000);
+    idle_counter++;
+    LOG_INFO("Idle mode: %lu minutes elapsed", idle_counter / 2);
   }
   /* USER CODE END 5 */
 }
