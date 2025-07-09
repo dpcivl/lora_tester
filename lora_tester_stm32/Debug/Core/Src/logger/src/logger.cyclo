@@ -1,0 +1,6 @@
+../Core/Src/logger/src/logger.c:23:14:LOGGER_Connect	3
+../Core/Src/logger/src/logger.c:34:14:LOGGER_Disconnect	3
+../Core/Src/logger/src/logger.c:43:14:LOGGER_Send	3
+../Core/Src/logger/src/logger.c:48:14:LOGGER_SendWithLevel	3
+../Core/Src/logger/src/logger.c:56:6:LOGGER_IsConnected	1
+../Core/Src/logger/src/logger.c:60:6:LOGGER_SendFormatted	2

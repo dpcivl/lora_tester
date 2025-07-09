@@ -1,0 +1,4 @@
+../Core/Src/logger/src/logger_platform.c:14:14:LOGGER_Platform_Connect	1
+../Core/Src/logger/src/logger_platform.c:20:14:LOGGER_Platform_Disconnect	1
+../Core/Src/logger/src/logger_platform.c:24:14:LOGGER_Platform_Send	4
+../Core/Src/logger/src/logger_platform.c:39:14:LOGGER_Platform_Configure	1

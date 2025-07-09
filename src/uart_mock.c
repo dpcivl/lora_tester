@@ -1,6 +1,5 @@
 #include "uart.h"
 #include <string.h>
-#include <stdio.h>
 
 // Mock 전용 전역 변수
 static char mock_receive_buffer[1024];
@@ -35,7 +34,6 @@ void UART_Mock_ClearDelayedResponse(void)
     memset(delayed_response_buffer, 0, sizeof(delayed_response_buffer));
     delayed_response_time = 0;
     delayed_response_set = false;
-    printf("Mock UART: Cleared delayed response\n");
 }
 
 void UART_Mock_SetReceiveData(const char* data)
@@ -58,9 +56,6 @@ void UART_Mock_SetDelayedResponse(uint32_t delay_ms, const char* data)
         extern uint32_t TIME_GetCurrentMs(void);
         delayed_response_time = TIME_GetCurrentMs() + delay_ms;
         delayed_response_set = true;
-        
-        printf("Mock UART: Set delayed response '%s' at %u ms (current: %u ms)\n", 
-               data, delayed_response_time, TIME_GetCurrentMs());
     }
 }
 
@@ -69,13 +64,11 @@ UartStatus UART_Platform_Connect(const char* port)
 {
     if (port == NULL) return UART_STATUS_ERROR;
     
-    printf("Mock UART: Connecting to %s\n", port);
     return UART_STATUS_OK;
 }
 
 UartStatus UART_Platform_Disconnect(void)
 {
-    printf("Mock UART: Disconnecting\n");
     return UART_STATUS_OK;
 }
 
@@ -85,7 +78,6 @@ UartStatus UART_Platform_Send(const char* data)
         return UART_STATUS_ERROR;
     }
     
-    printf("Mock UART: Sending '%s'\n", data);
     return UART_STATUS_OK;
 }
 
@@ -109,7 +101,6 @@ UartStatus UART_Platform_Receive(char* buffer, int buffer_size, int* bytes_recei
             // 지연 응답 초기화
             delayed_response_set = false;
             
-            printf("Mock UART: Received delayed response '%s'\n", buffer);
             return UART_STATUS_OK;
         }
     }
@@ -136,16 +127,12 @@ UartStatus UART_Platform_Receive(char* buffer, int buffer_size, int* bytes_recei
     buffer[i] = '\0';
     *bytes_received = i;
     
-    printf("Mock UART: Received '%s'\n", buffer);
     return UART_STATUS_OK;
 }
 
 UartStatus UART_Platform_Configure(const UartConfig* config)
 {
     if (config == NULL) return UART_STATUS_ERROR;
-    
-    printf("Mock UART: Configured (Baud: %d, Data: %d, Stop: %d, Parity: %d, Timeout: %dms)\n",
-           config->baud_rate, config->data_bits, config->stop_bits, config->parity, config->timeout_ms);
     
     return UART_STATUS_OK;
 } 

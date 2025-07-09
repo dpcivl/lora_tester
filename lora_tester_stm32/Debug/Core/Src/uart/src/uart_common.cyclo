@@ -1,0 +1,8 @@
+../Core/Src/uart/src/uart_common.c:25:12:UART_Connect	3
+../Core/Src/uart/src/uart_common.c:45:12:UART_Disconnect	3
+../Core/Src/uart/src/uart_common.c:65:12:UART_Send	4
+../Core/Src/uart/src/uart_common.c:89:12:UART_Receive	7
+../Core/Src/uart/src/uart_common.c:115:12:UART_ReceiveWithTimeout	12
+../Core/Src/uart/src/uart_common.c:168:12:UART_Configure	4
+../Core/Src/uart/src/uart_common.c:195:6:UART_IsConnected	1
+../Core/Src/uart/src/uart_common.c:201:6:UART_Reset	1

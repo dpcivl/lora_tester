@@ -1,0 +1,2 @@
+../Core/Src/time_stm32.c:12:10:TIME_Platform_GetCurrentMs	1
+../Core/Src/time_stm32.c:17:6:TIME_Platform_DelayMs	1

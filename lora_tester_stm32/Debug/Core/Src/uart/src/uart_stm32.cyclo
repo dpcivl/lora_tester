@@ -1,0 +1,7 @@
+../Core/Src/uart/src/uart_stm32.c:21:6:HAL_UART_RxCpltCallback	2
+../Core/Src/uart/src/uart_stm32.c:29:6:HAL_UART_ErrorCallback	2
+../Core/Src/uart/src/uart_stm32.c:36:12:UART_Platform_Connect	2
+../Core/Src/uart/src/uart_stm32.c:48:12:UART_Platform_Disconnect	1
+../Core/Src/uart/src/uart_stm32.c:57:12:UART_Platform_Send	5
+../Core/Src/uart/src/uart_stm32.c:70:12:UART_Platform_Receive	8
+../Core/Src/uart/src/uart_stm32.c:101:12:UART_Platform_Configure	9
