@@ -152,7 +152,7 @@ void test_LoraStarter_should_start_periodic_send_after_JOIN_OK(void)
     TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
     
     // 6. 첫 번째 주기적 송신 시작
-    CommandSender_Send_Expect("AT+SEND=Hello");
+    CommandSender_Send_Expect("AT+SEND=1:48656C6C6F"); // "Hello" → "48656C6C6F"
     LoraStarter_Process(&ctx, NULL); // SEND_PERIODIC -> WAIT_SEND_RESPONSE
     
     TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_RESPONSE, ctx.state);
@@ -177,17 +177,22 @@ void test_LoraStarter_should_continue_periodic_send_on_OK_response(void)
     };
 
     // 1. 첫 번째 send 명령어 전송
-    CommandSender_Send_Expect("AT+SEND=Hello");
+    CommandSender_Send_Expect("AT+SEND=1:48656C6C6F"); // "Hello" → "48656C6C6F"
     LoraStarter_Process(&ctx, NULL); // SEND_PERIODIC -> WAIT_SEND_RESPONSE
     TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_RESPONSE, ctx.state);
 
-    // 2. OK 응답 수신 시 다시 주기적 송신 상태로 전이
+    // 2. OK 응답 수신 시 대기 상태로 전이
     ResponseHandler_ParseSendResponse_ExpectAndReturn("+EVT:SEND_CONFIRMED_OK", RESPONSE_OK);
-    LoraStarter_Process(&ctx, "+EVT:SEND_CONFIRMED_OK"); // WAIT_SEND_RESPONSE -> SEND_PERIODIC
+    LoraStarter_Process(&ctx, "+EVT:SEND_CONFIRMED_OK"); // WAIT_SEND_RESPONSE -> WAIT_SEND_INTERVAL
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_INTERVAL, ctx.state);
+
+    // 3. 충분한 시간이 지나서 다시 SEND_PERIODIC으로 전이
+    TIME_Mock_SetCurrentTime(ctx.last_send_time + 35000); // 35초 후 (기본 30초 간격 초과)
+    LoraStarter_Process(&ctx, NULL); // WAIT_SEND_INTERVAL -> SEND_PERIODIC
     TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
 
-    // 3. 두 번째 send 명령어 전송
-    CommandSender_Send_Expect("AT+SEND=Hello");
+    // 4. 두 번째 send 명령어 전송
+    CommandSender_Send_Expect("AT+SEND=1:48656C6C6F"); // "Hello" → "48656C6C6F"
     LoraStarter_Process(&ctx, NULL); // SEND_PERIODIC -> WAIT_SEND_RESPONSE
     TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_RESPONSE, ctx.state);
 }
@@ -211,17 +216,22 @@ void test_LoraStarter_should_continue_periodic_send_on_TIMEOUT_response(void)
     };
 
     // 1. 첫 번째 send 명령어 전송
-    CommandSender_Send_Expect("AT+SEND=Hello");
+    CommandSender_Send_Expect("AT+SEND=1:48656C6C6F"); // "Hello" → "48656C6C6F"
     LoraStarter_Process(&ctx, NULL); // SEND_PERIODIC -> WAIT_SEND_RESPONSE
     TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_RESPONSE, ctx.state);
 
-    // 2. TIMEOUT 응답 수신 시 다시 주기적 송신 상태로 전이
+    // 2. TIMEOUT 응답 수신 시 대기 상태로 전이
     ResponseHandler_ParseSendResponse_ExpectAndReturn("TIMEOUT", RESPONSE_TIMEOUT);
-    LoraStarter_Process(&ctx, "TIMEOUT"); // WAIT_SEND_RESPONSE -> SEND_PERIODIC
+    LoraStarter_Process(&ctx, "TIMEOUT"); // WAIT_SEND_RESPONSE -> WAIT_SEND_INTERVAL
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_INTERVAL, ctx.state);
+
+    // 3. 충분한 시간이 지나서 다시 SEND_PERIODIC으로 전이
+    TIME_Mock_SetCurrentTime(ctx.last_send_time + 35000); // 35초 후 (기본 30초 간격 초과)
+    LoraStarter_Process(&ctx, NULL); // WAIT_SEND_INTERVAL -> SEND_PERIODIC
     TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
 
-    // 3. 두 번째 send 명령어 전송
-    CommandSender_Send_Expect("AT+SEND=Hello");
+    // 4. 두 번째 send 명령어 전송
+    CommandSender_Send_Expect("AT+SEND=1:48656C6C6F"); // "Hello" → "48656C6C6F"
     LoraStarter_Process(&ctx, NULL); // SEND_PERIODIC -> WAIT_SEND_RESPONSE
     TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_RESPONSE, ctx.state);
 }
@@ -245,7 +255,7 @@ void test_LoraStarter_should_retry_JOIN_on_ERROR_response(void)
     };
 
     // 1. 첫 번째 send 명령어 전송
-    CommandSender_Send_Expect("AT+SEND=Hello");
+    CommandSender_Send_Expect("AT+SEND=1:48656C6C6F"); // "Hello" → "48656C6C6F"
     LoraStarter_Process(&ctx, NULL); // SEND_PERIODIC -> WAIT_SEND_RESPONSE
     TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_RESPONSE, ctx.state);
 
@@ -295,7 +305,7 @@ void test_LoraStarter_should_handle_null_send_message(void)
         .send_message = NULL
     };
     // Should use default "Hello"
-    CommandSender_Send_Expect("AT+SEND=Hello");
+    CommandSender_Send_Expect("AT+SEND=1:48656C6C6F"); // "Hello" → "48656C6C6F"
     LoraStarter_Process(&ctx, NULL);
     TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_RESPONSE, ctx.state);
 }
@@ -605,7 +615,7 @@ void test_LoraStarter_should_use_default_message_when_send_message_is_NULL(void)
         .send_message = NULL
     };
 
-    CommandSender_Send_Expect("AT+SEND=Hello");  // 기본 메시지 사용
+    CommandSender_Send_Expect("AT+SEND=1:48656C6C6F"); // "Hello" → "48656C6C6F"  // 기본 메시지 사용
 
     LoraStarter_Process(&ctx, NULL);
 
@@ -650,7 +660,7 @@ void test_LoraStarter_should_reset_error_count_on_successful_SEND(void)
     LoraStarter_Process(&ctx, "+EVT:SEND_CONFIRMED_OK");
 
     // SEND 성공 시 에러 카운터와 재시도 관련 값들이 리셋되어야 함
-    TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_INTERVAL, ctx.state);
     TEST_ASSERT_EQUAL(0, ctx.error_count);
     TEST_ASSERT_EQUAL(1000, ctx.retry_delay_ms);
 }
@@ -670,9 +680,103 @@ void test_LoraStarter_should_reset_error_count_on_TIMEOUT_response(void)
     LoraStarter_Process(&ctx, "TIMEOUT");
 
     // TIMEOUT 응답 시에도 에러 카운터와 재시도 관련 값들이 리셋되어야 함
-    TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_INTERVAL, ctx.state);
     TEST_ASSERT_EQUAL(0, ctx.error_count);
     TEST_ASSERT_EQUAL(1000, ctx.retry_delay_ms);
+}
+
+// 새로운 WAIT_SEND_INTERVAL 상태 테스트
+void test_LoraStarter_should_wait_in_WAIT_SEND_INTERVAL_when_interval_not_passed(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_SEND_INTERVAL,
+        .last_send_time = 1000,
+        .send_interval_ms = 30000  // 30초 간격
+    };
+    
+    // 현재 시간을 5초 후로 설정 (아직 30초가 지나지 않음)
+    TIME_Mock_SetCurrentTime(6000);
+    
+    LoraStarter_Process(&ctx, NULL);
+    
+    // 아직 대기 시간이 남았으므로 상태 유지
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_INTERVAL, ctx.state);
+}
+
+void test_LoraStarter_should_proceed_to_SEND_PERIODIC_when_interval_passed(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_SEND_INTERVAL,
+        .last_send_time = 1000,
+        .send_interval_ms = 30000  // 30초 간격
+    };
+    
+    // 현재 시간을 35초 후로 설정 (30초 간격 초과)
+    TIME_Mock_SetCurrentTime(35000);
+    
+    LoraStarter_Process(&ctx, NULL);
+    
+    // 대기 시간이 지났으므로 SEND_PERIODIC으로 전이
+    TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
+}
+
+void test_LoraStarter_should_use_default_interval_when_send_interval_ms_is_zero(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_SEND_INTERVAL,
+        .last_send_time = 1000,
+        .send_interval_ms = 0  // 기본값 사용
+    };
+    
+    // 현재 시간을 25초 후로 설정 (기본값 30초보다 작음)
+    TIME_Mock_SetCurrentTime(26000);
+    
+    LoraStarter_Process(&ctx, NULL);
+    
+    // 기본 30초 간격이 적용되어 아직 대기 상태
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_INTERVAL, ctx.state);
+    
+    // 35초 후로 설정 (기본값 30초 초과)
+    TIME_Mock_SetCurrentTime(35000);
+    
+    LoraStarter_Process(&ctx, NULL);
+    
+    // 이제 SEND_PERIODIC으로 전이
+    TEST_ASSERT_EQUAL(LORA_STATE_SEND_PERIODIC, ctx.state);
+}
+
+void test_LoraStarter_should_set_last_send_time_on_successful_send(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_SEND_RESPONSE,
+        .last_send_time = 0
+    };
+    
+    TIME_Mock_SetCurrentTime(5000);
+    
+    ResponseHandler_ParseSendResponse_ExpectAndReturn("+EVT:SEND_CONFIRMED_OK", RESPONSE_OK);
+    LoraStarter_Process(&ctx, "+EVT:SEND_CONFIRMED_OK");
+    
+    // 성공 시 last_send_time이 설정되어야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_INTERVAL, ctx.state);
+    TEST_ASSERT_EQUAL(5000, ctx.last_send_time);
+}
+
+void test_LoraStarter_should_set_last_send_time_on_timeout(void)
+{
+    LoraStarterContext ctx = {
+        .state = LORA_STATE_WAIT_SEND_RESPONSE,
+        .last_send_time = 0
+    };
+    
+    TIME_Mock_SetCurrentTime(7000);
+    
+    ResponseHandler_ParseSendResponse_ExpectAndReturn("TIMEOUT", RESPONSE_TIMEOUT);
+    LoraStarter_Process(&ctx, "TIMEOUT");
+    
+    // 타임아웃 시에도 last_send_time이 설정되어야 함
+    TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_INTERVAL, ctx.state);
+    TEST_ASSERT_EQUAL(7000, ctx.last_send_time);
 }
 
 #endif // TEST

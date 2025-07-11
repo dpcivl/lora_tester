@@ -3,6 +3,11 @@
 	<item key="hasShownOverlayPopupBefore" value="true"/>
 	<item key="replaceBarOpen" value="false"/>
 	<list key="searchhistory">
+		<item value="goto"/>
+		<item value="한 번만"/>
+		<item value="MX_USART6_DMA"/>
+		<item value="AT"/>
+		<item value="StartDefaultTask"/>
 		<item value="MX_TIM6_Init()"/>
 	</list>
 </section>

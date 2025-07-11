@@ -17,6 +17,7 @@ static const char* get_state_name(LoraState state) {
         case LORA_STATE_WAIT_JOIN_OK: return "WAIT_JOIN_OK";
         case LORA_STATE_SEND_PERIODIC: return "SEND_PERIODIC";
         case LORA_STATE_WAIT_SEND_RESPONSE: return "WAIT_SEND_RESPONSE";
+        case LORA_STATE_WAIT_SEND_INTERVAL: return "WAIT_SEND_INTERVAL";
         case LORA_STATE_JOIN_RETRY: return "JOIN_RETRY";
         case LORA_STATE_DONE: return "DONE";
         case LORA_STATE_ERROR: return "ERROR";
@@ -60,15 +61,31 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
             }
             break;
         case LORA_STATE_WAIT_OK:
-            if (uart_rx && is_response_ok(uart_rx)) {
-                LOG_DEBUG("[LoRa] Command %d OK received", ctx->cmd_index + 1);
-                ctx->cmd_index++;
-                ctx->state = LORA_STATE_SEND_CMD;
+            if (uart_rx) {
+                if (is_response_ok(uart_rx)) {
+                    LOG_DEBUG("[LoRa] Command %d OK received", ctx->cmd_index + 1);
+                    ctx->cmd_index++;
+                    ctx->state = LORA_STATE_SEND_CMD;
+                } else if (strstr(uart_rx, "ERROR") || strstr(uart_rx, "AT_COMMAND_NOT_FOUND")) {
+                    LOG_WARN("[LoRa] Command %d failed: %s", ctx->cmd_index + 1, uart_rx);
+                    ctx->error_count++;
+                    
+                    // 에러 처리: 최대 3번 재시도 후 다음 명령으로 건너뛰기
+                    if (ctx->error_count < 3) {
+                        LOG_INFO("[LoRa] Retrying command %d (attempt %d/3)", ctx->cmd_index + 1, ctx->error_count + 1);
+                        ctx->state = LORA_STATE_SEND_CMD; // 같은 명령 재시도
+                    } else {
+                        LOG_WARN("[LoRa] Command %d failed after 3 attempts, skipping to next", ctx->cmd_index + 1);
+                        ctx->cmd_index++; // 다음 명령으로 건너뛰기
+                        ctx->error_count = 0; // 에러 카운터 리셋
+                        ctx->state = LORA_STATE_SEND_CMD;
+                    }
+                }
             }
             break;
         case LORA_STATE_SEND_JOIN:
             LORA_LOG_JOIN_ATTEMPT();
-            CommandSender_Send("AT+JOIN");
+            CommandSender_Send("AT+JOIN\r\n");
             ctx->state = LORA_STATE_WAIT_JOIN_OK;
             break;
         case LORA_STATE_WAIT_JOIN_OK:
@@ -85,8 +102,17 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
         case LORA_STATE_SEND_PERIODIC:
             {
                 char send_cmd[128];
+                char hex_data[64];
                 const char* message = (ctx->send_message != NULL) ? ctx->send_message : "Hello";
-                snprintf(send_cmd, sizeof(send_cmd), "AT+SEND=%s", message);
+                
+                // 문자열을 헥사 문자열로 변환
+                int len = strlen(message);
+                for (int i = 0; i < len && i < 31; i++) {  // 최대 31자 (62 hex chars)
+                    sprintf(&hex_data[i*2], "%02X", (unsigned char)message[i]);
+                }
+                hex_data[len*2] = '\0';
+                
+                snprintf(send_cmd, sizeof(send_cmd), "AT+SEND=1:%s\r\n", hex_data);
                 LORA_LOG_SEND_ATTEMPT(message);
                 CommandSender_Send(send_cmd);
                 ctx->state = LORA_STATE_WAIT_SEND_RESPONSE;
@@ -100,15 +126,17 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 switch(response_type) {
                     case RESPONSE_OK:
                         LORA_LOG_SEND_SUCCESS();
-                        ctx->state = LORA_STATE_SEND_PERIODIC; // 주기적 송신 계속
+                        ctx->state = LORA_STATE_WAIT_SEND_INTERVAL; // 주기적 대기 상태로 전이
                         ctx->error_count = 0; // 성공 시 에러 카운터 리셋
                         ctx->retry_delay_ms = 1000; // 재시도 지연 시간 리셋
+                        ctx->last_send_time = TIME_GetCurrentMs(); // 마지막 송신 시간 저장
                         break;
                     case RESPONSE_TIMEOUT:
                         LOG_WARN("[LoRa] SEND timeout");
-                        ctx->state = LORA_STATE_SEND_PERIODIC; // 주기적 송신 계속
+                        ctx->state = LORA_STATE_WAIT_SEND_INTERVAL; // 주기적 대기 상태로 전이
                         ctx->error_count = 0; // 성공 시 에러 카운터 리셋
                         ctx->retry_delay_ms = 1000; // 재시도 지연 시간 리셋
+                        ctx->last_send_time = TIME_GetCurrentMs(); // 마지막 송신 시간 저장
                         break;
                     case RESPONSE_ERROR:
                         LORA_LOG_SEND_FAILED("Network error");
@@ -127,6 +155,21 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                         // 알 수 없는 응답은 무시하고 계속 대기
                         LOG_DEBUG("[LoRa] Unknown response: %s", uart_rx);
                         break;
+                }
+            }
+            break;
+        case LORA_STATE_WAIT_SEND_INTERVAL:
+            {
+                uint32_t current_time = TIME_GetCurrentMs();
+                uint32_t interval_ms = (ctx->send_interval_ms > 0) ? ctx->send_interval_ms : 30000; // 기본값 30초
+                
+                if ((current_time - ctx->last_send_time) >= interval_ms) {
+                    LOG_DEBUG("[LoRa] Send interval passed (%u ms), ready for next send", interval_ms);
+                    ctx->state = LORA_STATE_SEND_PERIODIC;
+                } else {
+                    // 아직 대기 시간이 남았으므로 상태 유지
+                    uint32_t remaining_ms = interval_ms - (current_time - ctx->last_send_time);
+                    LOG_DEBUG("[LoRa] Waiting for send interval (%u ms remaining)", remaining_ms);
                 }
             }
             break;

@@ -9,6 +9,7 @@ typedef enum {
     LORA_STATE_WAIT_JOIN_OK,
     LORA_STATE_SEND_PERIODIC,      // 주기적 송신 상태
     LORA_STATE_WAIT_SEND_RESPONSE, // 송신 응답 대기
+    LORA_STATE_WAIT_SEND_INTERVAL, // 주기적 송신 대기 (타이머)
     LORA_STATE_JOIN_RETRY,         // JOIN 재시도 (ERROR 시)
     LORA_STATE_DONE,
     LORA_STATE_ERROR

@@ -1,6 +1,6 @@
-../Core/Src/uart/src/uart_stm32.c:27:13:flush_rx_buffer	6
-../Core/Src/uart/src/uart_stm32.c:58:12:UART_Platform_Connect	1
-../Core/Src/uart/src/uart_stm32.c:76:12:UART_Platform_Disconnect	1
-../Core/Src/uart/src/uart_stm32.c:89:12:UART_Platform_Send	30
-../Core/Src/uart/src/uart_stm32.c:205:12:UART_Platform_Receive	42
-../Core/Src/uart/src/uart_stm32.c:374:12:UART_Platform_Configure	8
+../Core/Src/uart/src/uart_stm32.c:27:13:flush_rx_buffer	5
+../Core/Src/uart/src/uart_stm32.c:43:12:UART_Platform_Connect	8
+../Core/Src/uart/src/uart_stm32.c:122:12:UART_Platform_Disconnect	2
+../Core/Src/uart/src/uart_stm32.c:135:12:UART_Platform_Send	5
+../Core/Src/uart/src/uart_stm32.c:155:12:UART_Platform_Receive	18
+../Core/Src/uart/src/uart_stm32.c:252:12:UART_Platform_Configure	8

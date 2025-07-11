@@ -30,6 +30,17 @@
 #include "LoraStarter.h"
 #include "CommandSender.h"
 #include "ResponseHandler.h"
+
+// LoraStarter용 로깅 매크로 정의
+#define LORA_LOG_JOIN_ATTEMPT() LOG_INFO("[LoRa] Attempting to JOIN LoRaWAN network...")
+#define LORA_LOG_JOIN_SUCCESS() LOG_INFO("[LoRa] ✅ Successfully JOINED LoRaWAN network")
+#define LORA_LOG_SEND_ATTEMPT(msg) LOG_INFO("[LoRa] 📤 Sending message: %s", msg)
+#define LORA_LOG_SEND_SUCCESS() LOG_INFO("[LoRa] ✅ Message sent successfully")
+#define LORA_LOG_SEND_FAILED(reason) LOG_WARN("[LoRa] ❌ Send failed: %s", reason)
+#define LORA_LOG_ERROR_COUNT(count) LOG_WARN("[LoRa] Error count: %d", count)
+#define LORA_LOG_RETRY_ATTEMPT(current, max) LOG_INFO("[LoRa] 🔄 Retry attempt %d/%d", current, max)
+#define LORA_LOG_MAX_RETRIES_REACHED() LOG_ERROR("[LoRa] ❌ Maximum retries reached")
+#define LORA_LOG_STATE_CHANGE(from, to) LOG_DEBUG("[LoRa] State: %s → %s", from, to)
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -108,7 +119,23 @@ UART_HandleTypeDef huart6;
 SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
+osThreadId receiveTaskHandle;
 /* USER CODE BEGIN PV */
+
+// 수신 태스크용 전역 변수
+char rx_buffer[256];
+int rx_bytes_received = 0;
+osMessageQId rxMessageQueue;
+
+// LoRa 통신용 전역 변수
+char lora_rx_response[256];
+volatile bool lora_new_response = false;
+
+// DMA 관련 변수
+DMA_HandleTypeDef hdma_usart6_rx;
+volatile uint8_t uart_rx_complete_flag = 0;
+volatile uint8_t uart_rx_error_flag = 0;
+volatile uint16_t uart_rx_length = 0;
 
 /* USER CODE END PV */
 
@@ -116,6 +143,7 @@ osThreadId defaultTaskHandle;
 void SystemClock_Config(void);
 void PeriphCommonClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC3_Init(void);
 static void MX_CRC_Init(void);
 static void MX_DCMI_Init(void);
@@ -139,7 +167,9 @@ static void MX_TIM8_Init(void);
 static void MX_TIM12_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART6_UART_Init(void);
+void MX_USART6_DMA_Init(void);  // USART6 DMA 초기화 함수 선언
 void StartDefaultTask(void const * argument);
+void StartReceiveTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -147,6 +177,113 @@ void StartDefaultTask(void const * argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+// UART DMA 콜백 함수들
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART6)
+  {
+    // DMA 수신 완료 (전체 버퍼) - 거의 발생하지 않음
+    uart_rx_complete_flag = 1;
+    uart_rx_length = sizeof(rx_buffer);
+    LOG_INFO("[DMA] RxCpltCallback: Full buffer received (%d bytes)", uart_rx_length);
+  }
+}
+
+void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART6)
+  {
+    // DMA 수신 절반 완료 - NORMAL 모드에서는 처리하지 않음 (IDLE 인터럽트가 처리)
+    LOG_WARN("[DMA] RxHalfCpltCallback: Half buffer reached but ignoring in NORMAL mode");
+    // uart_rx_complete_flag는 설정하지 않음 - IDLE 인터럽트에서만 설정
+  }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART6)
+  {
+    // UART 에러 발생
+    uart_rx_error_flag = 1;
+    LOG_WARN("[DMA] ErrorCallback: UART error occurred");
+    
+    // 모든 에러 플래그 클리어
+    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_ORE)) {
+      __HAL_UART_CLEAR_OREFLAG(huart);
+      LOG_WARN("[DMA] Overrun error cleared");
+    }
+    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_NE)) {
+      __HAL_UART_CLEAR_NEFLAG(huart);
+      LOG_WARN("[DMA] Noise error cleared");
+    }
+    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_FE)) {
+      __HAL_UART_CLEAR_FEFLAG(huart);
+      LOG_WARN("[DMA] Frame error cleared");
+    }
+    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_PE)) {
+      __HAL_UART_CLEAR_PEFLAG(huart);
+      LOG_WARN("[DMA] Parity error cleared");
+    }
+    
+    // UART와 DMA 상태 강제 리셋
+    HAL_UART_DMAStop(huart);
+    huart->gState = HAL_UART_STATE_READY;
+    huart->RxState = HAL_UART_STATE_READY;
+    if (huart->hdmarx != NULL) {
+      huart->hdmarx->State = HAL_DMA_STATE_READY;
+    }
+    
+    // 버퍼 클리어 후 DMA 재시작 (일반 모드)
+    memset(rx_buffer, 0, sizeof(rx_buffer));
+    HAL_StatusTypeDef status = HAL_UART_Receive_DMA(huart, (uint8_t*)rx_buffer, sizeof(rx_buffer));
+    if (status == HAL_OK) {
+      LOG_INFO("[DMA] Error recovery: DMA restarted successfully");
+    } else {
+      LOG_ERROR("[DMA] Error recovery: DMA restart failed (status: %d)", status);
+    }
+  }
+}
+
+// UART IDLE 인터럽트 콜백 (메시지 끝 감지)
+void USER_UART_IDLECallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART6)
+  {
+    // UART 에러 상태 체크
+    uint32_t error_flags = 0;
+    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_ORE)) error_flags |= 0x01;
+    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_FE)) error_flags |= 0x02;
+    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_NE)) error_flags |= 0x04;
+    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_PE)) error_flags |= 0x08;
+    
+    // IDLE 감지 - 메시지 끝
+    uint16_t remaining = __HAL_DMA_GET_COUNTER(huart->hdmarx);
+    uart_rx_length = sizeof(rx_buffer) - remaining;
+    
+    if (uart_rx_length > 0) {
+      uart_rx_complete_flag = 1;
+      if (error_flags != 0) {
+        LOG_WARN("[DMA] IDLE detected: %d bytes received (UART errors: 0x%02lX)", uart_rx_length, error_flags);
+      } else {
+        LOG_INFO("[DMA] IDLE detected: %d bytes received", uart_rx_length);
+      }
+      
+      // 첫 몇 바이트 확인 (디버깅용)
+      if (uart_rx_length >= 4) {
+        LOG_DEBUG("[DMA] First 4 bytes: %02X %02X %02X %02X", 
+                  rx_buffer[0], rx_buffer[1], rx_buffer[2], rx_buffer[3]);
+      }
+      
+      // DMA 중지 (일반 모드에서는 자동으로 완료됨)
+      HAL_UART_DMAStop(huart);
+      
+      // 다음 수신을 위해 즉시 재시작하지 않음 - uart_stm32.c에서 처리
+    } else {
+      LOG_DEBUG("[DMA] IDLE detected but no data");
+    }
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -181,6 +318,8 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();  // DMA는 UART보다 먼저 초기화
+//  MX_USART6_DMA_Init();  // USART6 DMA 초기화 (UART보다 먼저)
   MX_ADC3_Init();
   MX_CRC_Init();
   MX_DCMI_Init();
@@ -204,8 +343,20 @@ int main(void)
   MX_TIM12_Init();
   MX_USART1_UART_Init();
   MX_USART6_UART_Init();
+  
+  // UART 초기화 후 DMA 핸들 다시 연결 (HAL_UART_Init에서 리셋될 수 있음)
+  __HAL_LINKDMA(&huart6, hdmarx, hdma_usart6_rx);
+  
+  // UART IDLE 인터럽트 활성화 (DMA 기반 수신을 위해)
+  __HAL_UART_ENABLE_IT(&huart6, UART_IT_IDLE);
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  
+  // UART6 DMA 초기화 (UART 초기화 후)
+  MX_USART6_DMA_Init();
+  
+  // IDLE 인터럽트 활성화 (메시지 끝 감지용)
+  __HAL_UART_ENABLE_IT(&huart6, UART_IT_IDLE);
 
   /* USER CODE END 2 */
 
@@ -231,7 +382,9 @@ int main(void)
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  /* 수신 태스크 생성 - 백그라운드에서 계속 실행 */
+  osThreadDef(receiveTask, StartReceiveTask, osPriorityNormal, 0, 2048);
+  receiveTaskHandle = osThreadCreate(osThread(receiveTask), NULL);
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
@@ -1656,263 +1809,122 @@ void StartDefaultTask(void const * argument)
   // Logger 초기화 (STM32에서는 단순히 연결 상태 설정)
   LOGGER_Connect("STM32", 0);
   
-  LOG_INFO("=== STM32F746G-DISCO LoRa UART Test Started ===");
+  LOG_INFO("=== STM32F746G-DISCO UART6 Test Started ===");
   LOG_INFO("System Clock: %lu MHz", SystemCoreClock / 1000000);
   LOG_INFO("UART6 Configuration: 115200 baud, 8N1");
-  LOG_INFO("Test Objective: Send AT command once and check for OK response");
+  LOG_INFO("📌 CRITICAL: For loopback test, connect PC6(TX) to PC7(RX) with a wire!");
+  LOG_INFO("📌 UART6 Pins: PC6(TX) = Arduino D1, PC7(RX) = Arduino D0");
   
   // UART 연결 테스트
-  LOG_INFO("[STEP 1] Testing UART6 connection to LoRa module...");
-  LOG_INFO("UART6 Pins: PC6(TX) -> LoRa RX, PC7(RX) <- LoRa TX");
+  LOG_INFO("📤 [TX_TASK] Testing UART6 connection...");
   
   UartStatus uart_status = UART_Connect("UART6");
   if (uart_status == UART_STATUS_OK) {
-    LOG_INFO("[STEP 1] ✓ UART6 connection SUCCESS");
+    LOG_INFO("📤 [TX_TASK] ✓ UART6 connection SUCCESS");
   } else {
-    LOG_ERROR("[STEP 1] ✗ UART6 connection FAILED (status: %d)", uart_status);
-    LOG_ERROR("Program terminated due to UART connection failure");
+    LOG_ERROR("📤 [TX_TASK] ✗ UART6 connection FAILED (status: %d)", uart_status);
+    LOG_ERROR("📤 [TX_TASK] Program terminated due to UART connection failure");
     goto idle_loop;
   }
   
   // UART 연결 상태 확인
   if (UART_IsConnected()) {
-    LOG_INFO("[STEP 1] ✓ UART6 is CONNECTED and ready");
+    LOG_INFO("📤 [TX_TASK] ✓ UART6 is CONNECTED and ready");
   } else {
-    LOG_ERROR("[STEP 1] ✗ UART6 is NOT CONNECTED");
-    LOG_ERROR("Program terminated due to UART connection failure");
+    LOG_ERROR("📤 [TX_TASK] ✗ UART6 is NOT CONNECTED");
+    LOG_ERROR("📤 [TX_TASK] Program terminated due to UART connection failure");
     goto idle_loop;
   }
   
-  osDelay(1000); // 1초 대기 (안정화)
+  LOG_INFO("📤 [TX_TASK] Starting LoRa initialization and JOIN...");
+  LOG_INFO("📤 [TX_TASK] Waiting for LoRa module boot-up (10 seconds)...");
+  osDelay(10000); // 10초 대기 (LoRa 모듈 부팅 완료 대기)
   
-  // === 하드웨어 진단 단계 추가 ===
-  LOG_INFO("[DIAGNOSIS] === UART Hardware Diagnosis ===");
-  LOG_INFO("[DIAGNOSIS] Testing UART with different scenarios...");
-  
-  // 진단 1: 루프백 테스트 (PC6-PC7 연결 필요)
-  LOG_INFO("[DIAGNOSIS] Test 1: Loopback Test");
-  LOG_INFO("[DIAGNOSIS] Please connect PC6 to PC7 for loopback test");
-  LOG_INFO("[DIAGNOSIS] If no loopback: Disconnect LoRa and check with actual module");
-  
-  const char* loopback_cmd = "LOOP\r\n";
-  LOG_INFO("[DIAGNOSIS] Sending loopback test: '%s'", loopback_cmd);
-  
-  UartStatus loop_send_status = UART_Send(loopback_cmd);
-  if (loop_send_status == UART_STATUS_OK) {
-    LOG_INFO("[DIAGNOSIS] ✓ Loopback command sent");
-    
-    osDelay(500); // 500ms 대기
-    
-    char loop_buffer[256];
-    int loop_bytes = 0;
-    UartStatus loop_recv_status = UART_Receive(loop_buffer, sizeof(loop_buffer) - 1, &loop_bytes);
-    
-    if (loop_recv_status == UART_STATUS_OK && loop_bytes > 0) {
-      loop_buffer[loop_bytes] = '\0';
-      LOG_INFO("[DIAGNOSIS] ✓ Loopback received (%d bytes): '%s'", loop_bytes, loop_buffer);
-      
-      if (loop_bytes >= 6 && strncmp(loop_buffer, "LOOP", 4) == 0) {
-        LOG_INFO("[DIAGNOSIS] 🎉 UART Hardware WORKING - Full loopback success!");
-      } else if (loop_bytes == 1) {
-        LOG_WARN("[DIAGNOSIS] ⚠ Partial loopback - only 1 byte received");
-        LOG_WARN("[DIAGNOSIS] Same issue as LoRa - hardware timing problem");
-      } else {
-        LOG_INFO("[DIAGNOSIS] ✓ Loopback working but partial data");
-      }
-    } else {
-      LOG_WARN("[DIAGNOSIS] ⚠ No loopback data - check PC6-PC7 connection");
-    }
-  }
-  
-  // 진단 2: 다른 명령어 테스트
-  LOG_INFO("[DIAGNOSIS] Test 2: Different Command Formats");
-  
-  const char* test_commands[] = {
-    "AT",           // AT without CRLF
-    "AT\r",         // AT with CR only  
-    "AT\n",         // AT with LF only
-    "AT+VER\r\n",   // Version command
-    "+++",          // Command mode (some modules)
+  // LoRa 기본 연결 테스트 + 초기 설정 명령어들
+  const char* lora_init_commands[] = {
+    "AT\r\n",       // 버전 확인 (연결 테스트)
+    "AT+NWM=1\r\n",     // LoRaWAN 모드 설정
+    "AT+NJM=1\r\n",     // OTAA 모드 설정
+    "AT+CLASS=A\r\n",   // Class A 설정
+    "AT+BAND=7\r\n"     // Asia 923 MHz 대역 설정
   };
   
-  int num_test_commands = sizeof(test_commands) / sizeof(test_commands[0]);
+  // LoraStarter 컨텍스트 초기화
+  LoraStarterContext lora_ctx = {
+    .state = LORA_STATE_INIT,
+    .cmd_index = 0,
+    .commands = lora_init_commands,
+    .num_commands = sizeof(lora_init_commands) / sizeof(lora_init_commands[0]),
+    .send_message = "TEST",
+    .max_retry_count = 3,
+    .send_interval_ms = 300000  // 5분 간격
+  };
   
-  for (int i = 0; i < num_test_commands; i++) {
-    LOG_INFO("[DIAGNOSIS] Testing command %d: '%s'", i+1, test_commands[i]);
-    
-    UartStatus test_send_status = UART_Send(test_commands[i]);
-    if (test_send_status == UART_STATUS_OK) {
-      osDelay(1000); // 1초 대기
-      
-      char test_buffer[256];
-      int test_bytes = 0;
-      UartStatus test_recv_status = UART_Receive(test_buffer, sizeof(test_buffer) - 1, &test_bytes);
-      
-      if (test_recv_status == UART_STATUS_OK && test_bytes > 0) {
-        test_buffer[test_bytes] = '\0';
-        LOG_INFO("[DIAGNOSIS] ✓ Response to cmd %d (%d bytes): '%s'", i+1, test_bytes, test_buffer);
-      } else {
-        LOG_INFO("[DIAGNOSIS] ⚠ No response to cmd %d", i+1);
-      }
+  LOG_INFO("=== LoRa Initialization ===");
+  LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
+           lora_ctx.num_commands, lora_ctx.send_message, lora_ctx.max_retry_count);
+  
+  // LoRa 프로세스 루프 (초기화 → JOIN → 주기적 전송)
+  for(;;)
+  {
+    // 수신된 응답이 있으면 LoraStarter에 전달
+    const char* rx_data = NULL;
+    if (lora_new_response) {
+      rx_data = lora_rx_response;
+      lora_new_response = false; // 플래그 클리어
+      LOG_DEBUG("[TX_TASK] Processing LoRa response: %.20s...", rx_data);
     }
     
-    osDelay(500); // 명령어 간 간격
+    // LoraStarter 프로세스 실행
+    LoraStarter_Process(&lora_ctx, rx_data);
+    
+    // 상태별 처리 간격 및 디버깅
+    LOG_DEBUG("[TX_TASK] LoRa State: %d, cmd_index: %d/%d", 
+              lora_ctx.state, lora_ctx.cmd_index, lora_ctx.num_commands);
+    
+    switch(lora_ctx.state) {
+      case LORA_STATE_INIT:
+        osDelay(500); // 초기화 상태는 빠르게
+        break;
+      case LORA_STATE_SEND_CMD:
+        LOG_INFO("[TX_TASK] 📤 Sending command %d/%d", 
+                lora_ctx.cmd_index + 1, lora_ctx.num_commands);
+        osDelay(1000); // 명령어 전송 후 1초 대기
+        break;
+      case LORA_STATE_WAIT_OK:
+        LOG_DEBUG("[TX_TASK] ⏳ Waiting for OK response to command %d", 
+                 lora_ctx.cmd_index + 1);
+        osDelay(2000); // OK 응답 대기 중 2초 간격
+        break;
+      case LORA_STATE_SEND_JOIN:
+      case LORA_STATE_SEND_PERIODIC:
+        osDelay(2000); // JOIN/SEND 명령어 전송 후 2초 대기
+        break;
+      case LORA_STATE_WAIT_JOIN_OK:
+      case LORA_STATE_WAIT_SEND_RESPONSE:
+        osDelay(3000); // JOIN/SEND 응답 대기 중 3초 간격
+        break;
+      case LORA_STATE_WAIT_SEND_INTERVAL:
+        LOG_DEBUG("[TX_TASK] ⏳ Waiting for send interval (%u ms)", lora_ctx.send_interval_ms);
+        osDelay(5000); // 주기적 전송 대기 중 5초 간격으로 체크
+        break;
+      case LORA_STATE_JOIN_RETRY:
+        osDelay(5000); // 재시도 대기 5초
+        break;
+      case LORA_STATE_DONE:
+      case LORA_STATE_ERROR:
+        LOG_INFO("📤 [TX_TASK] LoRa process completed with state: %s", 
+                lora_ctx.state == LORA_STATE_DONE ? "DONE" : "ERROR");
+        goto idle_loop;
+      default:
+        osDelay(1000);
+        break;
+    }
   }
-  
-  LOG_INFO("[DIAGNOSIS] === End of Hardware Diagnosis ===");
-  osDelay(2000); // 2초 대기
-  
-  // === 원래 AT 명령어 테스트 계속 ===
-  
-  // AT 명령어 전송
-  LOG_INFO("[STEP 2] Sending AT command to LoRa module...");
-  
-  const char* test_cmd = "AT\r\n";
-  LOG_INFO("[STEP 2] Command: '%s'", test_cmd);
-  
-  UartStatus send_status = UART_Send(test_cmd);
-  if (send_status == UART_STATUS_OK) {
-    LOG_INFO("[STEP 2] ✓ AT command sent successfully");
-  } else {
-    LOG_ERROR("[STEP 2] ✗ AT command send FAILED (status: %d)", send_status);
-    LOG_ERROR("Program terminated due to send failure");
-    goto idle_loop;
-  }
-  
-  // 응답 대기
-  LOG_INFO("[STEP 3] Waiting for LoRa module response...");
-  osDelay(1000); // 1초 대기 (응답 시간)
-  
-  // 응답 확인
-  char rx_buffer[256];
-  int bytes_received = 0;
-  
-  UartStatus recv_status = UART_Receive(rx_buffer, sizeof(rx_buffer) - 1, &bytes_received);
-  
-  if (recv_status == UART_STATUS_OK && bytes_received > 0) {
-    // 수신된 데이터를 null-terminate
-    rx_buffer[bytes_received] = '\0';
-    
-    LOG_INFO("[STEP 3] ✓ Response received (%d bytes)", bytes_received);
-    LOG_INFO("[STEP 3] Raw response: '%s'", rx_buffer);
-    
-    // 바이트별 분석 (디버깅용)
-    LOG_INFO("[STEP 3] Hex dump:");
-    for (int i = 0; i < bytes_received; i++) {
-      uint8_t byte = (uint8_t)rx_buffer[i];
-      char printable = (byte >= 32 && byte <= 126) ? byte : '.';
-      LOG_INFO("  [%d] = 0x%02X ('%c') %s", i, byte, printable,
-              (byte == 0x0D) ? "<CR>" : 
-              (byte == 0x0A) ? "<LF>" : 
-              (byte == 0x20) ? "<SPACE>" : "");
-    }
-    
-    // 부분적 응답 검사: 'O' 문자만 받은 경우 추가 수신 시도
-    if (bytes_received == 1 && rx_buffer[0] == 'O') {
-      LOG_INFO("[STEP 3] 🔍 Detected partial response 'O' - waiting for remaining data...");
-      
-      // 추가 수신 시도 (더 긴 타임아웃)
-      char additional_buffer[256];
-      int additional_bytes = 0;
-      int total_attempts = 0;
-      const int max_attempts = 5;
-      
-      while (total_attempts < max_attempts) {
-        total_attempts++;
-        LOG_INFO("[STEP 3] Additional receive attempt %d/%d...", total_attempts, max_attempts);
-        
-        osDelay(500); // 500ms 추가 대기
-        
-        UartStatus additional_status = UART_Receive(additional_buffer, sizeof(additional_buffer) - 1, &additional_bytes);
-        
-        if (additional_status == UART_STATUS_OK && additional_bytes > 0) {
-          additional_buffer[additional_bytes] = '\0';
-          LOG_INFO("[STEP 3] ✓ Additional data received (%d bytes): '%s'", additional_bytes, additional_buffer);
-          
-          // 기존 응답과 합치기
-          if (bytes_received + additional_bytes < sizeof(rx_buffer) - 1) {
-            memcpy(rx_buffer + bytes_received, additional_buffer, additional_bytes);
-            bytes_received += additional_bytes;
-            rx_buffer[bytes_received] = '\0';
-            
-            LOG_INFO("[STEP 3] ✓ Combined response (%d bytes): '%s'", bytes_received, rx_buffer);
-            
-            // 완전한 OK 응답인지 확인
-            extern bool is_response_ok(const char* response);
-            if (is_response_ok(rx_buffer)) {
-              LOG_INFO("[STEP 3] 🎉 Complete OK response found after %d attempts!", total_attempts);
-              break;
-            } else if (strstr(rx_buffer, "OK") != NULL) {
-              LOG_INFO("[STEP 3] ✓ OK pattern found in combined response");
-              break;
-            } else {
-              LOG_INFO("[STEP 3] Partial response continues, trying again...");
-            }
-          } else {
-            LOG_WARN("[STEP 3] ⚠ Buffer overflow prevented during response combination");
-            break;
-          }
-        } else {
-          LOG_INFO("[STEP 3] No additional data in attempt %d", total_attempts);
-        }
-      }
-      
-      if (total_attempts >= max_attempts) {
-        LOG_WARN("[STEP 3] ⚠ Max attempts reached, proceeding with partial response");
-      }
-    }
-    
-    // ResponseHandler를 사용하여 OK 응답 확인
-    extern bool is_response_ok(const char* response);
-    
-    if (is_response_ok(rx_buffer)) {
-      LOG_INFO("[RESULT] 🎉 SUCCESS: LoRa module responded with OK!");
-      LOG_INFO("[RESULT] ✓ Communication test PASSED");
-      LOG_INFO("[RESULT] ✓ LoRa module is ready for commands");
-    } else if (strstr(rx_buffer, "OK") != NULL) {
-      LOG_INFO("[RESULT] 🎉 SUCCESS: Found OK in response!");
-      LOG_INFO("[RESULT] ✓ Communication test PASSED");
-      LOG_INFO("[RESULT] ✓ LoRa module is ready for commands");
-    } else if (strstr(rx_buffer, "AT") != NULL) {
-      LOG_INFO("[RESULT] 📡 INFO: LoRa module echoed AT command");
-      LOG_INFO("[RESULT] ✓ Communication working (echo mode)");
-      LOG_WARN("[RESULT] ⚠ No explicit OK received, but communication confirmed");
-    } else if (strstr(rx_buffer, "ERROR") != NULL) {
-      LOG_WARN("[RESULT] ⚠ WARNING: LoRa module responded with ERROR");
-      LOG_WARN("[RESULT] Check LoRa module configuration");
-    } else if (bytes_received == 1 && rx_buffer[0] == 'O') {
-      LOG_WARN("[RESULT] ⚠ PARTIAL: Only 'O' received, likely incomplete OK response");
-      LOG_WARN("[RESULT] ✓ Communication working, but response may be incomplete");
-      LOG_WARN("[RESULT] Suggestions:");
-      LOG_WARN("  - LoRa module may need more time to respond");
-      LOG_WARN("  - Check LoRa module firmware/configuration");
-      LOG_WARN("  - Try different AT command format");
-    } else {
-      LOG_INFO("[RESULT] 📋 INFO: Unknown response pattern");
-      LOG_INFO("[RESULT] ✓ Communication working, but response format unexpected");
-    }
-    
-  } else if (recv_status == UART_STATUS_TIMEOUT) {
-    LOG_WARN("[STEP 3] ⚠ No response from LoRa module (TIMEOUT)");
-    LOG_WARN("[RESULT] ❌ FAILED: No response received");
-    LOG_WARN("[RESULT] Troubleshooting:");
-    LOG_WARN("  1. Check LoRa module power supply");
-    LOG_WARN("  2. Verify wiring: PC6(TX)->RX, PC7(RX)<-TX");
-    LOG_WARN("  3. Try different baud rates: 9600, 38400, 57600");
-    LOG_WARN("  4. Check if LoRa module requires wake-up sequence");
-    LOG_WARN("  5. For loopback test: Connect PC6 to PC7");
-  } else {
-    LOG_ERROR("[STEP 3] ✗ Response receive FAILED (status: %d)", recv_status);
-    LOG_ERROR("[RESULT] ❌ FAILED: Reception error");
-  }
-  
-  LOG_INFO("=== AT Command Test Completed ===");
-  LOG_INFO("Program will now enter idle mode");
-  LOG_INFO("Reset the board to run the test again");
 
 idle_loop:
   /* Infinite idle loop */
-  LOG_INFO("Entering idle mode...");
+  LOG_INFO("📤 [TX_TASK] Entering idle mode...");
   uint32_t idle_counter = 0;
   
   for(;;)
@@ -1920,10 +1932,119 @@ idle_loop:
     // 30초마다 idle 상태 표시
     osDelay(30000);
     idle_counter++;
-    LOG_INFO("Idle mode: %lu minutes elapsed", idle_counter / 2);
+    LOG_INFO("📤 [TX_TASK] Idle mode: %lu minutes elapsed", idle_counter / 2);
   }
   /* USER CODE END 5 */
 }
+
+/* USER CODE BEGIN Header_StartReceiveTask */
+/**
+  * @brief  Function implementing the receiveTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartReceiveTask */
+void StartReceiveTask(void const * argument)
+{
+  /* USER CODE BEGIN StartReceiveTask */
+  LOG_INFO("=== DMA-based Receive Task Started ===");
+  
+  // UART 초기화 대기
+  osDelay(2000);
+  
+  // TDD 모듈들을 사용한 DMA 기반 수신 태스크
+  char local_buffer[256];
+  int local_bytes_received = 0;
+  
+  for(;;)
+  {
+    // TDD UART 모듈을 통한 DMA 기반 수신 체크
+    UartStatus status = UART_Receive(local_buffer, sizeof(local_buffer), &local_bytes_received);
+    
+    // 디버깅용: 수신 상태 체크 (에러 상태일 때만)
+    static uint32_t debug_counter = 0;
+    debug_counter++;
+    if (debug_counter % 200 == 0 && status != UART_STATUS_TIMEOUT) {  // 10초마다, 타임아웃 제외
+      LOG_INFO("[RX_TASK] Status check #%lu: status=%d, bytes=%d, flags: rx_complete=%d, rx_error=%d", 
+               debug_counter / 200, status, local_bytes_received, uart_rx_complete_flag, uart_rx_error_flag);
+    }
+    
+    if (status == UART_STATUS_OK && local_bytes_received > 0) {
+      // 수신 완료 - TDD ResponseHandler로 분석
+      LOG_INFO("📥 RECV: '%s' (%d bytes)", local_buffer, local_bytes_received);
+      
+      // TDD ResponseHandler를 사용하여 응답 분석
+      if (is_response_ok(local_buffer)) {
+        LOG_INFO("✅ OK response");
+      } else if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
+        LOG_INFO("✅ JOIN response");
+      } else if (strstr(local_buffer, "RAKwireless") != NULL) {
+        LOG_INFO("📡 LoRa module boot message (ignored)");
+      } else {
+        ResponseType response_type = ResponseHandler_ParseSendResponse(local_buffer);
+        switch (response_type) {
+          case RESPONSE_OK:
+            LOG_INFO("✅ OK");
+            break;
+          case RESPONSE_ERROR:
+            LOG_WARN("⚠️ ERROR");
+            break;
+          case RESPONSE_TIMEOUT:
+            LOG_WARN("⚠️ TIMEOUT");
+            break;
+          case RESPONSE_UNKNOWN:
+            LOG_INFO("❓ UNKNOWN format: %.20s...", local_buffer);  // 처음 20자만 표시
+            break;
+        }
+      }
+      
+      // 전역 변수에 복사 (다른 태스크에서 사용 가능)
+      memcpy(rx_buffer, local_buffer, local_bytes_received);
+      rx_bytes_received = local_bytes_received;
+      
+      // LoRa 상태 머신에 전달할 응답만 필터링
+      bool is_lora_command_response = false;
+      
+      if (is_response_ok(local_buffer)) {
+        // OK 응답 - LoRa 명령에 대한 응답
+        is_lora_command_response = true;
+      } else if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
+        // JOIN 성공 응답
+        is_lora_command_response = true;
+      } else if (strstr(local_buffer, "+EVT:") != NULL) {
+        // 기타 LoRa 이벤트 응답들
+        is_lora_command_response = true;
+      } else if (strstr(local_buffer, "RAKwireless") != NULL || strstr(local_buffer, "ORAKwireless") != NULL) {
+        // 부트 메시지 - LoRa 상태 머신에 전달하지 않음
+        LOG_DEBUG("[RX_TASK] Boot message filtered out from LoRa state machine");
+      } else {
+        // 기타 응답들 (ERROR, TIMEOUT 등)
+        ResponseType response_type = ResponseHandler_ParseSendResponse(local_buffer);
+        if (response_type != RESPONSE_UNKNOWN) {
+          is_lora_command_response = true;
+        }
+      }
+      
+      // LoRa 명령 응답만 전역 변수에 복사
+      if (is_lora_command_response) {
+        memcpy(lora_rx_response, local_buffer, local_bytes_received);
+        lora_rx_response[local_bytes_received] = '\0';
+        lora_new_response = true;
+        LOG_DEBUG("[RX_TASK] LoRa response forwarded to state machine: %.20s...", local_buffer);
+      }
+      
+      // 버퍼 클리어
+      memset(local_buffer, 0, sizeof(local_buffer));
+      local_bytes_received = 0;
+    }
+    
+    // DMA 기반이므로 긴 지연으로 CPU 사용률 감소
+    osDelay(50);  // 50ms 지연 (DMA가 백그라운드에서 처리하므로 빠른 폴링 불필요)
+  }
+  /* USER CODE END StartReceiveTask */
+}
+
+
 
 /**
   * @brief  Period elapsed callback in non blocking mode
@@ -1978,3 +2099,51 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
+/**
+  * @brief DMA Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_DMA_Init(void)
+{
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Stream1_IRQn interrupt configuration - USART6_RX */
+  HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
+  
+  /* USART6_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(USART6_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(USART6_IRQn);
+}
+
+/**
+  * @brief DMA2 Stream1 DMA configuration for USART6 RX
+  * @param None
+  * @retval None
+  */
+void MX_USART6_DMA_Init(void)
+{
+  /* Configure DMA for USART6 RX */
+  hdma_usart6_rx.Instance = DMA2_Stream1;
+  hdma_usart6_rx.Init.Channel = DMA_CHANNEL_5;
+  hdma_usart6_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
+  hdma_usart6_rx.Init.PeriphInc = DMA_PINC_DISABLE;
+  hdma_usart6_rx.Init.MemInc = DMA_MINC_ENABLE;
+  hdma_usart6_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+  hdma_usart6_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+  hdma_usart6_rx.Init.Mode = DMA_NORMAL;    // 일반 모드로 변경
+  hdma_usart6_rx.Init.Priority = DMA_PRIORITY_HIGH;
+  hdma_usart6_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+  
+  if (HAL_DMA_Init(&hdma_usart6_rx) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* Associate the initialized DMA handle to the UART handle */
+  __HAL_LINKDMA(&huart6, hdmarx, hdma_usart6_rx);
+}

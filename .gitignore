@@ -237,6 +237,7 @@ mock_*.h
 # =========================================================================
 
 # STM32CubeIDE
+.metadata/
 stm32/.settings/
 stm32/.mxproject
 stm32/.cproject
@@ -299,3 +300,5 @@ stm32/*.plg
 stm32/*.user
 stm32/*.log
 stm32/*.tmp 
+
+**/.cursor/

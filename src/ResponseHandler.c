@@ -38,7 +38,22 @@ bool is_join_response_ok(const char* response)
     
     LOG_DEBUG("[ResponseHandler] Checking JOIN response: '%s'", response);
     
-    bool result = (strcmp(response, "+EVT:JOINED") == 0);
+    // 개행 문자 제거하여 비교
+    char clean_response[256];
+    strncpy(clean_response, response, sizeof(clean_response) - 1);
+    clean_response[sizeof(clean_response) - 1] = '\0';
+    
+    // 개행 문자 제거
+    char* pos = clean_response;
+    while (*pos) {
+        if (*pos == '\r' || *pos == '\n') {
+            *pos = '\0';
+            break;
+        }
+        pos++;
+    }
+    
+    bool result = (strcmp(clean_response, "+EVT:JOINED") == 0);
     
     if (result) {
         LOG_INFO("[ResponseHandler] JOIN response confirmed: %s", response);
@@ -58,11 +73,11 @@ ResponseType ResponseHandler_ParseSendResponse(const char* response)
     
     LOG_DEBUG("[ResponseHandler] Parsing SEND response: '%s'", response);
     
-    if (strcmp(response, "+EVT:SEND_CONFIRMED_OK") == 0) {
+    if (strstr(response, "+EVT:SEND_CONFIRMED_OK") != NULL) {
         LOG_INFO("[ResponseHandler] SEND response: CONFIRMED_OK");
         return RESPONSE_OK;
     }
-    if (strncmp(response, "+EVT:SEND_CONFIRMED_FAILED", 25) == 0) {
+    if (strstr(response, "+EVT:SEND_CONFIRMED_FAILED") != NULL) {
         LOG_WARN("[ResponseHandler] SEND response: CONFIRMED_FAILED");
         return RESPONSE_ERROR;
     }
