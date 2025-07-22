@@ -728,16 +728,16 @@ void test_LoraStarter_should_use_default_interval_when_send_interval_ms_is_zero(
         .send_interval_ms = 0  // 기본값 사용
     };
     
-    // 현재 시간을 25초 후로 설정 (기본값 30초보다 작음)
-    TIME_Mock_SetCurrentTime(26000);
+    // 현재 시간을 4분 후로 설정 (기본값 5분보다 작음)
+    TIME_Mock_SetCurrentTime(241000);
     
     LoraStarter_Process(&ctx, NULL);
     
-    // 기본 30초 간격이 적용되어 아직 대기 상태
+    // 기본 5분 간격이 적용되어 아직 대기 상태
     TEST_ASSERT_EQUAL(LORA_STATE_WAIT_SEND_INTERVAL, ctx.state);
     
-    // 35초 후로 설정 (기본값 30초 초과)
-    TIME_Mock_SetCurrentTime(35000);
+    // 6분 후로 설정 (기본값 5분 초과)
+    TIME_Mock_SetCurrentTime(361000);
     
     LoraStarter_Process(&ctx, NULL);
     
