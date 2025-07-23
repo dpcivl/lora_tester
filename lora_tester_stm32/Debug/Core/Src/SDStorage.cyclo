@@ -1,0 +1,9 @@
+../Core/Src/SDStorage.c:39:5:SDStorage_Init	4
+../Core/Src/SDStorage.c:83:5:SDStorage_WriteLog	11
+../Core/Src/SDStorage.c:130:6:SDStorage_IsReady	1
+../Core/Src/SDStorage.c:135:6:SDStorage_Disconnect	3
+../Core/Src/SDStorage.c:157:5:SDStorage_CreateNewLogFile	5
+../Core/Src/SDStorage.c:197:8:SDStorage_GetCurrentLogSize	1
+../Core/Src/SDStorage.c:203:12:_create_log_directory	1
+../Core/Src/SDStorage.c:215:12:_generate_log_filename	5
+../Core/Src/SDStorage.c:262:17:_get_current_timestamp	1

@@ -7,6 +7,7 @@
 
 
 #include "logger.h"
+#include "../Network.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -42,6 +43,16 @@ LoggerStatus LOGGER_Disconnect(void) {
 
 LoggerStatus LOGGER_Send(const char* message) {
     if (!logger_connected || message == NULL) return LOGGER_STATUS_ERROR;
+    
+    // Network 모듈을 통해 로그 전송 (SD카드 또는 소켓)
+    if (Network_IsConnected()) {
+        int result = Network_SendBinary(message, strlen(message) + 1); // null terminator 포함
+        if (result == NETWORK_OK) {
+            return LOGGER_STATUS_OK;
+        }
+    }
+    
+    // Network 모듈 사용 실패 시 기존 플랫폼 방식 사용
     return LOGGER_Platform_Send(message);
 }
 

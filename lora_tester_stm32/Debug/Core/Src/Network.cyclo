@@ -1,0 +1,7 @@
+../Core/Src/Network.c:11:5:Network_SetBackend	1
+../Core/Src/Network.c:17:18:Network_GetBackend	1
+../Core/Src/Network.c:22:5:Network_InitSD	3
+../Core/Src/Network.c:37:5:Network_Init	4
+../Core/Src/Network.c:59:5:Network_SendBinary	10
+../Core/Src/Network.c:98:6:Network_IsConnected	4
+../Core/Src/Network.c:106:6:Network_Disconnect	4

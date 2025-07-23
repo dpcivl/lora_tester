@@ -30,17 +30,10 @@
 #include "LoraStarter.h"
 #include "CommandSender.h"
 #include "ResponseHandler.h"
+#include "Network.h"
+#include "SDStorage.h"
 
-// LoraStarter용 로깅 매크로 정의
-#define LORA_LOG_JOIN_ATTEMPT() LOG_INFO("[LoRa] Attempting to JOIN LoRaWAN network...")
-#define LORA_LOG_JOIN_SUCCESS() LOG_INFO("[LoRa] ✅ Successfully JOINED LoRaWAN network")
-#define LORA_LOG_SEND_ATTEMPT(msg) LOG_INFO("[LoRa] 📤 Sending message: %s", msg)
-#define LORA_LOG_SEND_SUCCESS() LOG_INFO("[LoRa] ✅ Message sent successfully")
-#define LORA_LOG_SEND_FAILED(reason) LOG_WARN("[LoRa] ❌ Send failed: %s", reason)
-#define LORA_LOG_ERROR_COUNT(count) LOG_WARN("[LoRa] Error count: %d", count)
-#define LORA_LOG_RETRY_ATTEMPT(current, max) LOG_INFO("[LoRa] 🔄 Retry attempt %d/%d", current, max)
-#define LORA_LOG_MAX_RETRIES_REACHED() LOG_ERROR("[LoRa] ❌ Maximum retries reached")
-#define LORA_LOG_STATE_CHANGE(from, to) LOG_DEBUG("[LoRa] State: %s → %s", from, to)
+// LoraStarter용 로깅 매크로는 logger.h에 정의되어 있음
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -123,12 +116,12 @@ osThreadId receiveTaskHandle;
 /* USER CODE BEGIN PV */
 
 // 수신 태스크용 전역 변수
-char rx_buffer[256];
+char rx_buffer[512];
 int rx_bytes_received = 0;
 osMessageQId rxMessageQueue;
 
 // LoRa 통신용 전역 변수
-char lora_rx_response[256];
+char lora_rx_response[512];
 volatile bool lora_new_response = false;
 
 // DMA 관련 변수
@@ -351,6 +344,38 @@ int main(void)
   __HAL_UART_ENABLE_IT(&huart6, UART_IT_IDLE);
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  
+  // Logger 초기화 (터미널 출력만 사용)
+  LOGGER_Connect("STM32", 0);
+  
+  // SD카드 하드웨어 및 SDMMC 레벨 테스트
+  LOG_INFO("=== SD Card Deep Diagnosis ===");
+  
+  // 1. SD카드 감지 확인
+  GPIO_PinState detect_pin = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13);
+  LOG_INFO("SD Detect Pin: %d", detect_pin);
+  
+  // 2. SDMMC 직접 테스트
+  HAL_SD_CardInfoTypeDef cardInfo;
+  HAL_StatusTypeDef sd_status = HAL_SD_GetCardInfo(&hsd1, &cardInfo);
+  LOG_INFO("HAL_SD_GetCardInfo: %d", sd_status);
+  
+  if (sd_status == HAL_OK) {
+      LOG_INFO("✅ SD Card detected by SDMMC");
+      LOG_INFO("Card Type: %lu", cardInfo.CardType);
+      LOG_INFO("Card Size: %lu MB", (cardInfo.LogBlockNbr * cardInfo.LogBlockSize) / (1024*1024));
+  } else {
+      LOG_ERROR("❌ SDMMC cannot detect SD card");
+  }
+  
+  // 3. 간단한 결론
+  if (sd_status == HAL_OK && cardInfo.LogBlockNbr > 0) {
+      LOG_INFO("✅ SD Card hardware OK but may need formatting");
+  } else {
+      LOG_WARN("❌ SD Card hardware issue detected");
+  }
+  
+  LOG_INFO("=== SD Card diagnosis complete - continuing with LoRa ===");
   
   // UART6 DMA 초기화 (UART 초기화 후)
   MX_USART6_DMA_Init();
@@ -1806,8 +1831,7 @@ void StartDefaultTask(void const * argument)
   MX_USB_HOST_Init();
   /* USER CODE BEGIN 5 */
   
-  // Logger 초기화 (STM32에서는 단순히 연결 상태 설정)
-  LOGGER_Connect("STM32", 0);
+  // Logger는 이미 SD카드와 연결됨
   
   LOG_INFO("=== STM32F746G-DISCO UART6 Test Started ===");
   LOG_INFO("System Clock: %lu MHz", SystemCoreClock / 1000000);
@@ -1863,6 +1887,12 @@ void StartDefaultTask(void const * argument)
   LOG_INFO("=== LoRa Initialization ===");
   LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
            lora_ctx.num_commands, lora_ctx.send_message, lora_ctx.max_retry_count);
+           
+  // LoRa 로그를 SD카드에 저장하기 시작
+  LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
+  
+  // SD카드 로그 파일 생성
+  SDStorage_CreateNewLogFile();
   
   // LoRa 프로세스 루프 (초기화 → JOIN → 주기적 전송)
   for(;;)
@@ -1953,7 +1983,7 @@ void StartReceiveTask(void const * argument)
   osDelay(2000);
   
   // TDD 모듈들을 사용한 DMA 기반 수신 태스크
-  char local_buffer[256];
+  char local_buffer[512];
   int local_bytes_received = 0;
   
   for(;;)

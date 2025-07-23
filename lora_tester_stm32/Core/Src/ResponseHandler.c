@@ -45,7 +45,7 @@ bool is_join_response_ok(const char* response)
     LOG_DEBUG("[ResponseHandler] Checking JOIN response: '%s'", response);
     
     // 개행 문자 제거하여 비교
-    char clean_response[256];
+    char clean_response[512];
     strncpy(clean_response, response, sizeof(clean_response) - 1);
     clean_response[sizeof(clean_response) - 1] = '\0';
     

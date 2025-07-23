@@ -2,6 +2,8 @@
 #include "uart.h"
 #include "logger.h"
 #include <stddef.h>
+#include <string.h>
+#include <stdio.h>
 
 void CommandSender_Send(const char* command)
 {

@@ -77,7 +77,7 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...);
     LOG_WARN("[LoRa] SEND failed: %s", reason)
 
 #define LORA_LOG_RETRY_ATTEMPT(attempt_num, max_retries) \
-    LOG_WARN("[LoRa] Retry attempt %d/%s", attempt_num, (max_retries == 0) ? "∞" : max_retries)
+    LOG_WARN("[LoRa] Retry attempt %d/%d", attempt_num, max_retries)
 
 #define LORA_LOG_STATE_CHANGE(from_state, to_state) \
     LOG_DEBUG("[LoRa] State change: %s -> %s", from_state, to_state)

@@ -6,6 +6,7 @@
 #include "logger.h"
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 // 상태 이름을 문자열로 변환하는 헬퍼 함수
 static const char* get_state_name(LoraState state) {
