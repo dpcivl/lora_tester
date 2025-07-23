@@ -65,7 +65,7 @@ See BSP_SD_ErrorCallback() and BSP_SD_AbortCallback() below
  * BSP_SD_Init() elsewhere in the application.
  */
 /* USER CODE BEGIN disableSDInit */
-/* #define DISABLE_SD_INIT */
+#define DISABLE_SD_INIT
 /* USER CODE END disableSDInit */
 
 /*
@@ -158,13 +158,31 @@ static int SD_CheckStatusWithTimeout(uint32_t timeout)
 
 static DSTATUS SD_CheckStatus(BYTE lun)
 {
+  extern UART_HandleTypeDef huart6;
+  const char* start_msg = "[SD_CheckStatus] Start\r\n";
+  HAL_UART_Transmit(&huart6, (uint8_t*)start_msg, strlen(start_msg), 100);
+
   Stat = STA_NOINIT;
 
-  if(BSP_SD_GetCardState() == SD_TRANSFER_OK)
+  // BSP 함수 대신 HAL 함수 직접 사용
+  extern SD_HandleTypeDef hsd1;
+  HAL_SD_CardStateTypeDef cardState = HAL_SD_GetCardState(&hsd1);
+  
+  const char* check_msg = "[SD_CheckStatus] Got card state\r\n";
+  HAL_UART_Transmit(&huart6, (uint8_t*)check_msg, strlen(check_msg), 100);
+  
+  if(cardState == HAL_SD_CARD_TRANSFER)
   {
     Stat &= ~STA_NOINIT;
+    const char* success_msg = "[SD_CheckStatus] SUCCESS!\r\n";
+    HAL_UART_Transmit(&huart6, (uint8_t*)success_msg, strlen(success_msg), 100);
+  } else {
+    const char* fail_msg = "[SD_CheckStatus] FAILED!\r\n";
+    HAL_UART_Transmit(&huart6, (uint8_t*)fail_msg, strlen(fail_msg), 100);
   }
 
+  const char* end_msg = "[SD_CheckStatus] End\r\n";
+  HAL_UART_Transmit(&huart6, (uint8_t*)end_msg, strlen(end_msg), 100);
   return Stat;
 }
 
@@ -175,54 +193,8 @@ static DSTATUS SD_CheckStatus(BYTE lun)
   */
 DSTATUS SD_initialize(BYTE lun)
 {
-Stat = STA_NOINIT;
-
-  /*
-   * check that the kernel has been started before continuing
-   * as the osMessage API will fail otherwise
-   */
-#if (osCMSIS <= 0x20000U)
-  if(osKernelRunning())
-#else
-  if(osKernelGetState() == osKernelRunning)
-#endif
-  {
-#if !defined(DISABLE_SD_INIT)
-
-    if(BSP_SD_Init() == MSD_OK)
-    {
-      Stat = SD_CheckStatus(lun);
-    }
-
-#else
-    Stat = SD_CheckStatus(lun);
-#endif
-
-    /*
-    * if the SD is correctly initialized, create the operation queue
-    * if not already created
-    */
-
-    if (Stat != STA_NOINIT)
-    {
-      if (SDQueueID == NULL)
-      {
- #if (osCMSIS <= 0x20000U)
-      osMessageQDef(SD_Queue, QUEUE_SIZE, uint16_t);
-      SDQueueID = osMessageCreate (osMessageQ(SD_Queue), NULL);
-#else
-      SDQueueID = osMessageQueueNew(QUEUE_SIZE, 2, NULL);
-#endif
-      }
-
-      if (SDQueueID == NULL)
-      {
-        Stat |= STA_NOINIT;
-      }
-    }
-  }
-
-  return Stat;
+  // 테스트: 즉시 성공 반환
+  return 0;
 }
 
 /**

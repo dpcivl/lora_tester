@@ -287,7 +287,9 @@ void USER_UART_IDLECallback(UART_HandleTypeDef *huart)
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-
+  // 리셋 카운터 추가
+  static uint32_t reset_count = 0;
+  reset_count++;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -348,34 +350,67 @@ int main(void)
   // Logger 초기화 (터미널 출력만 사용)
   LOGGER_Connect("STM32", 0);
   
-  // SD카드 하드웨어 및 SDMMC 레벨 테스트
-  LOG_INFO("=== SD Card Deep Diagnosis ===");
+  // 리셋 원인 확인
+  LOG_INFO("=== SYSTEM START (Reset #%lu) ===", reset_count);
   
-  // 1. SD카드 감지 확인
-  GPIO_PinState detect_pin = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13);
-  LOG_INFO("SD Detect Pin: %d", detect_pin);
+  // RCC 리셋 플래그 확인
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST)) LOG_WARN("Reset: BOR (Brown-out)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST)) LOG_WARN("Reset: PIN (External)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST)) LOG_WARN("Reset: POR (Power-on)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST)) LOG_WARN("Reset: SOFTWARE");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) LOG_WARN("Reset: IWDG (Watchdog)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST)) LOG_WARN("Reset: WWDG (Window Watchdog)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST)) LOG_WARN("Reset: LPWR (Low Power)");
   
-  // 2. SDMMC 직접 테스트
-  HAL_SD_CardInfoTypeDef cardInfo;
-  HAL_StatusTypeDef sd_status = HAL_SD_GetCardInfo(&hsd1, &cardInfo);
-  LOG_INFO("HAL_SD_GetCardInfo: %d", sd_status);
+  // 플래그 클리어
+  __HAL_RCC_CLEAR_RESET_FLAGS();
   
-  if (sd_status == HAL_OK) {
-      LOG_INFO("✅ SD Card detected by SDMMC");
-      LOG_INFO("Card Type: %lu", cardInfo.CardType);
-      LOG_INFO("Card Size: %lu MB", (cardInfo.LogBlockNbr * cardInfo.LogBlockSize) / (1024*1024));
+  // SD카드 완전 초기화
+  static uint32_t init_count = 0;
+  init_count++;
+  LOG_INFO("=== SD Card Complete Initialization (Call #%lu) ===", init_count);
+  
+  // 1. SDMMC 하드웨어 강제 재초기화
+  LOG_INFO("Initial SDMMC1 State: %d", hsd1.State);
+  
+  // SDMMC 재초기화 시도
+  HAL_StatusTypeDef init_result = HAL_SD_Init(&hsd1);
+  LOG_INFO("HAL_SD_Init result: %d", init_result);
+  LOG_INFO("After init SDMMC1 State: %d", hsd1.State);
+  
+  if (init_result == HAL_OK) {
+      // 2. SD카드 정보 확인
+      HAL_SD_CardInfoTypeDef cardInfo;
+      HAL_StatusTypeDef info_result = HAL_SD_GetCardInfo(&hsd1, &cardInfo);
+      LOG_INFO("HAL_SD_GetCardInfo: %d", info_result);
+      
+      if (info_result == HAL_OK) {
+          LOG_INFO("Card Size: %lu MB", (cardInfo.LogBlockNbr * cardInfo.LogBlockSize) / (1024*1024));
+      }
+      
+      // 3. SD카드 상태 확인
+      HAL_SD_CardStateTypeDef cardState = HAL_SD_GetCardState(&hsd1);
+      LOG_INFO("HAL_SD_GetCardState: %d (4=TRANSFER)", cardState);
+      
+      // 4. 디스크 초기화 시도
+      DSTATUS disk_stat = disk_initialize(0);
+      LOG_INFO("disk_initialize result: %d", disk_stat);
+      
+      // 5. 에러 코드별 분석
+      if (disk_stat & STA_NOINIT) LOG_ERROR("- STA_NOINIT: Drive not initialized");
+      if (disk_stat & STA_NODISK) LOG_ERROR("- STA_NODISK: No medium in the drive");  
+      if (disk_stat & STA_PROTECT) LOG_ERROR("- STA_PROTECT: Write protected");
+      
+      if (disk_stat == 0) {  // DSTATUS 0 = 초기화 성공
+          LOG_INFO("✅ SD Card fully initialized - proceeding with file test");
+      } else {
+          LOG_ERROR("❌ disk_initialize failed with status: 0x%02X", disk_stat);
+      }
   } else {
-      LOG_ERROR("❌ SDMMC cannot detect SD card");
+      LOG_ERROR("❌ SDMMC hardware initialization failed");
   }
   
-  // 3. 간단한 결론
-  if (sd_status == HAL_OK && cardInfo.LogBlockNbr > 0) {
-      LOG_INFO("✅ SD Card hardware OK but may need formatting");
-  } else {
-      LOG_WARN("❌ SD Card hardware issue detected");
-  }
-  
-  LOG_INFO("=== SD Card diagnosis complete - continuing with LoRa ===");
+  LOG_INFO("=== SD Card diagnosis complete ===");
   
   // UART6 DMA 초기화 (UART 초기화 후)
   MX_USART6_DMA_Init();

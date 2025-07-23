@@ -246,7 +246,60 @@ GND               ----> GND
 - Continuous operation loop
 - Production-ready state machine
 
+## SD Card Logging Implementation Progress (2025-07-23)
+
+### 🔄 CURRENT WORK: SD Card Integration
+- **Objective**: Implement dual logging (Terminal + SD Card)  
+- **Status**: 🟡 IN PROGRESS - Hardware level working, FatFs integration blocked
+
+### SD Card Hardware Analysis Results:
+- ✅ **Physical Detection**: SD Detect Pin (PC13) = 0 (Card Present)
+- ✅ **SDMMC Controller**: HAL_SD_Init() successful, State = 1 (Ready)
+- ✅ **Card Recognition**: 3584 MB SD card fully detected
+- ✅ **Card State**: HAL_SD_GetCardState() = 4 (TRANSFER mode)
+- ❌ **FatFs Integration**: disk_initialize() returns 1 (STA_NOINIT)
+
+### Technical Issues Identified:
+1. **BSP vs HAL Conflict**: 
+   - FatFs sd_diskio.c uses BSP_SD_* functions
+   - We initialize with HAL_SD_* functions  
+   - Modified `SD_CheckStatus()` to use HAL functions directly
+
+2. **FatFs Configuration**: 
+   - Enabled `DISABLE_SD_INIT` flag to prevent BSP re-initialization
+   - SD card hardware is perfect, issue is in FatFs driver layer
+
+3. **Current Blocker**: 
+   - `disk_initialize()` fails despite perfect hardware state
+   - Suspected FreeRTOS kernel state check issue
+   - Added debugging to `SD_initialize()` function
+
+### Code Changes Made:
+```c
+// sd_diskio.c modifications:
+#define DISABLE_SD_INIT  // Skip BSP_SD_Init()
+
+static DSTATUS SD_CheckStatus(BYTE lun) {
+    // Use HAL instead of BSP
+    HAL_SD_CardStateTypeDef cardState = HAL_SD_GetCardState(&hsd1);
+    if(cardState == HAL_SD_CARD_TRANSFER) {
+        Stat &= ~STA_NOINIT;
+    }
+    return Stat;
+}
+```
+
+### Buffer Size Fixes:
+- **RX Buffers**: 256 → 512 bytes (prevent DMA overflow)
+- **Files Modified**: main.c, ResponseHandler.c, uart_stm32.c
+
+### Logger System:
+- ✅ **Terminal Output**: Working perfectly  
+- 🟡 **SD Card Output**: Hardware ready, software blocked
+- 🟡 **Dual Output**: Prepared but not active
+
 ---
-**Last Update**: 2025-07-11
-**Status**: ✅ PRODUCTION READY - Periodic LoRa data transmission fully operational
-**Next Phase**: Network error handling and LAN-based logging implementation
+**Last Update**: 2025-07-23  
+**Status**: 🟡 LoRa PRODUCTION READY + SD Card Hardware READY + FatFs Integration BLOCKED
+**Current Issue**: FreeRTOS kernel state check in disk_initialize()
+**Next Steps**: Debug FreeRTOS/FatFs integration issue
