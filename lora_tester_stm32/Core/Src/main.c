@@ -267,18 +267,13 @@ int main(void)
   // 플래그 클리어
   __HAL_RCC_CLEAR_RESET_FLAGS();
   
-  // ===== 새로운 초기화 순서: SD 먼저, 그 다음 UART =====
+  // ===== 하드웨어 초기화만 main()에서 수행 =====
   
-  // 1. SD 카드 초기화 (가장 먼저 - 블로킹 방지를 위해)
-  LOG_INFO("🔄 Initializing SD card storage (priority initialization)...");
-  g_sd_initialization_result = SDStorage_Init();
-  if (g_sd_initialization_result == SDSTORAGE_OK) {
-    LOG_INFO("✅ SD card initialized successfully - ready for dual logging");
-  } else {
-    LOG_WARN("⚠️ SD card init failed (code: %d) - terminal logging only", g_sd_initialization_result);
-  }
+  // SD카드 초기화는 FreeRTOS 태스크에서 수행 (커널 시작 후)
+  LOG_INFO("🔄 SD card initialization will be performed in FreeRTOS task");
+  g_sd_initialization_result = -1;  // 초기화 안됨 상태
   
-  // 2. UART6 DMA 초기화 (SD 초기화 완료 후)
+  // UART6 DMA 초기화
   LOG_INFO("🔄 Initializing UART DMA after SD preparation...");
   MX_USART6_DMA_Init();
   
@@ -1003,9 +998,9 @@ static void MX_SDMMC1_SD_Init(void)
   hsd1.Init.ClockEdge = SDMMC_CLOCK_EDGE_RISING;
   hsd1.Init.ClockBypass = SDMMC_CLOCK_BYPASS_DISABLE;
   hsd1.Init.ClockPowerSave = SDMMC_CLOCK_POWER_SAVE_DISABLE;
-  hsd1.Init.BusWide = SDMMC_BUS_WIDE_4B;
+  hsd1.Init.BusWide = SDMMC_BUS_WIDE_1B;  // ST 커뮤니티 가이드: 1-bit 모드로 변경
   hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_DISABLE;
-  hsd1.Init.ClockDiv = 0;
+  hsd1.Init.ClockDiv = 2;  // 클럭 속도 낮춤 (새로운 SD카드 호환성 개선)
   /* USER CODE BEGIN SDMMC1_Init 2 */
   
   // Initialize SD card with HAL
@@ -1748,6 +1743,15 @@ void StartDefaultTask(void const * argument)
   LOG_INFO("📌 CRITICAL: For loopback test, connect PC6(TX) to PC7(RX) with a wire!");
   LOG_INFO("📌 UART6 Pins: PC6(TX) = Arduino D1, PC7(RX) = Arduino D0");
   
+  // FreeRTOS 커널 시작 후 SD카드 초기화
+  LOG_INFO("📤 [TX_TASK] Initializing SD card storage (after FreeRTOS start)...");
+  g_sd_initialization_result = SDStorage_Init();
+  if (g_sd_initialization_result == SDSTORAGE_OK) {
+    LOG_INFO("📤 [TX_TASK] ✅ SD card initialized successfully - dual logging enabled");
+  } else {
+    LOG_WARN("📤 [TX_TASK] ⚠️ SD card init failed (code: %d) - terminal logging only", g_sd_initialization_result);
+  }
+
   // UART 연결 테스트
   LOG_INFO("📤 [TX_TASK] Testing UART6 connection...");
   
@@ -1781,11 +1785,103 @@ void StartDefaultTask(void const * argument)
   LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
            lora_ctx.num_commands, lora_ctx.send_message, lora_ctx.max_retry_count);
            
-  // SD 카드 상태 확인 후 로깅 설정
+  // SD 카드 기본 쓰기 기능 테스트
   extern int g_sd_initialization_result; // main()에서 설정된 SD 결과
   if (g_sd_initialization_result == SDSTORAGE_OK) {
-    LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
-    SDStorage_CreateNewLogFile();
+    LOG_INFO("🧪 Testing basic SD card write functionality...");
+    
+    // HAL 레벨 직접 쓰기/읽기 테스트
+    extern SD_HandleTypeDef hsd1;
+    static uint8_t test_write_buffer[512];
+    static uint8_t test_read_buffer[512];
+    
+    // 테스트 데이터 준비 (간단한 패턴)
+    for(int i = 0; i < 512; i++) {
+      test_write_buffer[i] = (uint8_t)(i % 256);
+    }
+    
+    // SD카드 상태 재확인
+    HAL_SD_CardStateTypeDef card_state_before = HAL_SD_GetCardState(&hsd1);
+    LOG_INFO("📋 SD card state before write: %d", card_state_before);
+    
+    // SD카드 정보 확인
+    HAL_SD_CardInfoTypeDef card_info;
+    HAL_StatusTypeDef info_result = HAL_SD_GetCardInfo(&hsd1, &card_info);
+    LOG_INFO("📋 HAL_SD_GetCardInfo result: %d", info_result);
+    if(info_result == HAL_OK) {
+      LOG_INFO("📋 Card LogBlockNbr: %lu, LogBlockSize: %lu", card_info.LogBlockNbr, card_info.LogBlockSize);
+      LOG_INFO("📋 Card Type: %lu, Class: %lu", card_info.CardType, card_info.Class);
+    }
+    
+    LOG_INFO("📝 Writing test pattern to sector 2000...");
+    HAL_StatusTypeDef write_result = HAL_SD_WriteBlocks(&hsd1, test_write_buffer, 2000, 1, 5000);
+    LOG_INFO("📝 HAL_SD_WriteBlocks result: %d", write_result);
+    
+    // 쓰기 실패 시 에러 상태 분석
+    if(write_result != HAL_OK) {
+      HAL_SD_CardStateTypeDef card_state_after = HAL_SD_GetCardState(&hsd1);
+      LOG_ERROR("📋 SD card state after failed write: %d", card_state_after);
+      LOG_ERROR("📋 SDMMC ErrorCode: 0x%08lX", hsd1.ErrorCode);
+      
+      // 일반적인 HAL 상태 코드 해석
+      switch(write_result) {
+        case HAL_ERROR:
+          LOG_ERROR("📋 HAL_ERROR - General error occurred");
+          break;
+        case HAL_BUSY:
+          LOG_ERROR("📋 HAL_BUSY - SD card is busy");
+          break;
+        case HAL_TIMEOUT:
+          LOG_ERROR("📋 HAL_TIMEOUT - Operation timed out");
+          break;
+        default:
+          LOG_ERROR("📋 Unknown HAL status: %d", write_result);
+          break;
+      }
+    }
+    
+    if(write_result == HAL_OK) {
+      // 쓰기 후 약간의 지연
+      osDelay(100);
+      
+      LOG_INFO("📖 Reading back from sector 2000...");
+      HAL_StatusTypeDef read_result = HAL_SD_ReadBlocks(&hsd1, test_read_buffer, 2000, 1, 5000);
+      LOG_INFO("📖 HAL_SD_ReadBlocks result: %d", read_result);
+      
+      if(read_result == HAL_OK) {
+        // 데이터 검증
+        int match_count = 0;
+        int mismatch_count = 0;
+        
+        for(int i = 0; i < 512; i++) {
+          if(test_write_buffer[i] == test_read_buffer[i]) {
+            match_count++;
+          } else {
+            mismatch_count++;
+            if(mismatch_count <= 5) { // 처음 5개 불일치만 출력
+              LOG_WARN("📊 Mismatch at byte %d: wrote 0x%02X, read 0x%02X", 
+                       i, test_write_buffer[i], test_read_buffer[i]);
+            }
+          }
+        }
+        
+        LOG_INFO("📊 Data verification: %d matches, %d mismatches out of 512 bytes", 
+                 match_count, mismatch_count);
+        
+        if(mismatch_count == 0) {
+          LOG_INFO("✅ SD card basic write/read test PASSED - data integrity OK");
+        } else {
+          LOG_WARN("⚠️ SD card write/read test FAILED - data corruption detected");
+          LOG_WARN("💡 SD card may have wear-out or controller issues");
+        }
+      } else {
+        LOG_ERROR("❌ Read back failed after successful write");
+      }
+    } else {
+      LOG_ERROR("❌ Basic write test failed");
+    }
+    
+    LOG_INFO("📺 Continuing with terminal-only logging for LoRa operations");
   } else {
     LOG_INFO("📺 LoRa logs will be displayed on terminal only (SD not available)");
   }
