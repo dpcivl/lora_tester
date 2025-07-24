@@ -1727,14 +1727,15 @@ void StartDefaultTask(void const * argument)
   MX_USB_HOST_Init();
   /* USER CODE BEGIN 5 */
   
-  // SD Card 초기화 (TDD 검증된 SDStorage 사용)
-  LOG_INFO("🔄 Initializing SD card storage...");
-  int sd_result = SDStorage_Init();
-  if (sd_result == SDSTORAGE_OK) {
-    LOG_INFO("✅ SD card initialized successfully");
-  } else {
-    LOG_WARN("⚠️ SD card init failed (code: %d)", sd_result);
-  }
+  // SD Card 초기화 (TDD 검증된 SDStorage 사용) - 임시 주석 처리
+  // LOG_INFO("🔄 Initializing SD card storage...");
+  // int sd_result = SDStorage_Init();
+  // if (sd_result == SDSTORAGE_OK) {
+  //   LOG_INFO("✅ SD card initialized successfully");
+  // } else {
+  //   LOG_WARN("⚠️ SD card init failed (code: %d)", sd_result);
+  // }
+  LOG_INFO("⚠️ SD card initialization temporarily disabled for LoRa testing");
   
   LOG_INFO("=== STM32F746G-DISCO UART6 Test Started ===");
   LOG_INFO("System Clock: %lu MHz", SystemCoreClock / 1000000);
