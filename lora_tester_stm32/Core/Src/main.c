@@ -35,6 +35,13 @@
 #include "SDStorage.h"
 
 // LoraStarter용 로깅 매크로는 logger.h에 정의되어 있음
+
+// UART 전역 변수들 (uart_stm32.c에서 정의됨)
+extern char rx_buffer[512];
+extern volatile uint16_t uart_rx_length;
+extern volatile uint8_t uart_rx_complete_flag;
+extern volatile uint8_t uart_rx_error_flag;
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -117,7 +124,6 @@ osThreadId receiveTaskHandle;
 /* USER CODE BEGIN PV */
 
 // 수신 태스크용 전역 변수
-char rx_buffer[512];
 int rx_bytes_received = 0;
 osMessageQId rxMessageQueue;
 
@@ -127,9 +133,6 @@ volatile bool lora_new_response = false;
 
 // DMA 관련 변수
 DMA_HandleTypeDef hdma_usart6_rx;
-volatile uint8_t uart_rx_complete_flag = 0;
-volatile uint8_t uart_rx_error_flag = 0;
-volatile uint16_t uart_rx_length = 0;
 
 /* USER CODE END PV */
 
@@ -172,112 +175,7 @@ void StartReceiveTask(void const * argument);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// UART DMA 콜백 함수들
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-  if (huart->Instance == USART6)
-  {
-    // DMA 수신 완료 (전체 버퍼) - 거의 발생하지 않음
-    uart_rx_complete_flag = 1;
-    uart_rx_length = sizeof(rx_buffer);
-    LOG_INFO("[DMA] RxCpltCallback: Full buffer received (%d bytes)", uart_rx_length);
-  }
-}
-
-void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
-{
-  if (huart->Instance == USART6)
-  {
-    // DMA 수신 절반 완료 - NORMAL 모드에서는 처리하지 않음 (IDLE 인터럽트가 처리)
-    LOG_WARN("[DMA] RxHalfCpltCallback: Half buffer reached but ignoring in NORMAL mode");
-    // uart_rx_complete_flag는 설정하지 않음 - IDLE 인터럽트에서만 설정
-  }
-}
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-  if (huart->Instance == USART6)
-  {
-    // UART 에러 발생
-    uart_rx_error_flag = 1;
-    LOG_WARN("[DMA] ErrorCallback: UART error occurred");
-    
-    // 모든 에러 플래그 클리어
-    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_ORE)) {
-      __HAL_UART_CLEAR_OREFLAG(huart);
-      LOG_WARN("[DMA] Overrun error cleared");
-    }
-    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_NE)) {
-      __HAL_UART_CLEAR_NEFLAG(huart);
-      LOG_WARN("[DMA] Noise error cleared");
-    }
-    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_FE)) {
-      __HAL_UART_CLEAR_FEFLAG(huart);
-      LOG_WARN("[DMA] Frame error cleared");
-    }
-    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_PE)) {
-      __HAL_UART_CLEAR_PEFLAG(huart);
-      LOG_WARN("[DMA] Parity error cleared");
-    }
-    
-    // UART와 DMA 상태 강제 리셋
-    HAL_UART_DMAStop(huart);
-    huart->gState = HAL_UART_STATE_READY;
-    huart->RxState = HAL_UART_STATE_READY;
-    if (huart->hdmarx != NULL) {
-      huart->hdmarx->State = HAL_DMA_STATE_READY;
-    }
-    
-    // 버퍼 클리어 후 DMA 재시작 (일반 모드)
-    memset(rx_buffer, 0, sizeof(rx_buffer));
-    HAL_StatusTypeDef status = HAL_UART_Receive_DMA(huart, (uint8_t*)rx_buffer, sizeof(rx_buffer));
-    if (status == HAL_OK) {
-      LOG_INFO("[DMA] Error recovery: DMA restarted successfully");
-    } else {
-      LOG_ERROR("[DMA] Error recovery: DMA restart failed (status: %d)", status);
-    }
-  }
-}
-
-// UART IDLE 인터럽트 콜백 (메시지 끝 감지)
-void USER_UART_IDLECallback(UART_HandleTypeDef *huart)
-{
-  if (huart->Instance == USART6)
-  {
-    // UART 에러 상태 체크
-    uint32_t error_flags = 0;
-    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_ORE)) error_flags |= 0x01;
-    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_FE)) error_flags |= 0x02;
-    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_NE)) error_flags |= 0x04;
-    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_PE)) error_flags |= 0x08;
-    
-    // IDLE 감지 - 메시지 끝
-    uint16_t remaining = __HAL_DMA_GET_COUNTER(huart->hdmarx);
-    uart_rx_length = sizeof(rx_buffer) - remaining;
-    
-    if (uart_rx_length > 0) {
-      uart_rx_complete_flag = 1;
-      if (error_flags != 0) {
-        LOG_WARN("[DMA] IDLE detected: %d bytes received (UART errors: 0x%02lX)", uart_rx_length, error_flags);
-      } else {
-        LOG_INFO("[DMA] IDLE detected: %d bytes received", uart_rx_length);
-      }
-      
-      // 첫 몇 바이트 확인 (디버깅용)
-      if (uart_rx_length >= 4) {
-        LOG_DEBUG("[DMA] First 4 bytes: %02X %02X %02X %02X", 
-                  rx_buffer[0], rx_buffer[1], rx_buffer[2], rx_buffer[3]);
-      }
-      
-      // DMA 중지 (일반 모드에서는 자동으로 완료됨)
-      HAL_UART_DMAStop(huart);
-      
-      // 다음 수신을 위해 즉시 재시작하지 않음 - uart_stm32.c에서 처리
-    } else {
-      LOG_DEBUG("[DMA] IDLE detected but no data");
-    }
-  }
-}
+// UART DMA 콜백 함수들은 uart_stm32.c로 이동됨
 
 /* USER CODE END 0 */
 
@@ -1984,8 +1882,8 @@ void StartReceiveTask(void const * argument)
     static uint32_t debug_counter = 0;
     debug_counter++;
     if (debug_counter % 200 == 0 && status != UART_STATUS_TIMEOUT) {  // 10초마다, 타임아웃 제외
-      LOG_INFO("[RX_TASK] Status check #%lu: status=%d, bytes=%d, flags: rx_complete=%d, rx_error=%d", 
-               debug_counter / 200, status, local_bytes_received, uart_rx_complete_flag, uart_rx_error_flag);
+      LOG_INFO("[RX_TASK] Status check #%lu: status=%d, bytes=%d", 
+               debug_counter / 200, status, local_bytes_received);
     }
     
     if (status == UART_STATUS_OK && local_bytes_received > 0) {

@@ -4,3 +4,7 @@
 ../Core/Src/uart/src/uart_stm32.c:135:12:UART_Platform_Send	5
 ../Core/Src/uart/src/uart_stm32.c:155:12:UART_Platform_Receive	18
 ../Core/Src/uart/src/uart_stm32.c:252:12:UART_Platform_Configure	8
+../Core/Src/uart/src/uart_stm32.c:275:6:HAL_UART_RxCpltCallback	2
+../Core/Src/uart/src/uart_stm32.c:286:6:HAL_UART_RxHalfCpltCallback	2
+../Core/Src/uart/src/uart_stm32.c:296:6:HAL_UART_ErrorCallback	8
+../Core/Src/uart/src/uart_stm32.c:342:6:USER_UART_IDLECallback	9
