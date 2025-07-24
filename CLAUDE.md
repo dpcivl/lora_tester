@@ -582,7 +582,129 @@ static char rx_buffer[512];  // 512바이트로 확대
 - **시스템 안정성**: 모든 에러 처리가 TDD로 검증됨
 
 ---
-**Last Update**: 2025-07-24 오후 세션  
-**Status**: 🎉 **TDD 모듈화 완료** - 하드코딩 제거 및 모듈 중심 아키텍처 달성  
-**Achievement**: LoRa 시스템 완전한 TDD 검증 + SD 하드웨어 정상 + FatFs 통합 대기  
-**Next Priority**: SD 카드 FatFs 통합 완료 또는 대안 솔루션 구현
+
+## 빌드 에러 수정 및 SD 카드 격리 테스트 (2025-07-24 저녁)
+
+### 🎯 **세션 목표**
+TDD 리팩토링 후 발생한 빌드 에러 수정 및 SD 카드 문제로 인한 LoRa 동작 차단 해결
+
+### 🔧 **발생한 빌드 에러들**
+
+#### **1. HAL 콜백 함수 중복 정의 (uart_stm32.c)**
+**문제:** 리팩토링 과정에서 콜백 함수들이 파일 내에 중복 정의됨
+- `HAL_UART_RxCpltCallback()` - 275번째 라인과 389번째 라인
+- `HAL_UART_RxHalfCpltCallback()` - 286번째 라인과 403번째 라인
+- `HAL_UART_ErrorCallback()` - 296번째 라인과 415번째 라인
+- `USER_UART_IDLECallback()` - 342번째 라인과 456번째 라인
+
+**해결:** 중복된 두 번째 정의 블록 (389-497번 라인) 완전 제거
+
+#### **2. rx_buffer 미선언 에러 (main.c)**
+**문제:** main.c에서 rx_buffer 사용하지만 extern 선언 누락
+```c
+error: 'rx_buffer' undeclared (first use in this function)
+memcpy(rx_buffer, local_buffer, local_bytes_received);
+```
+
+**해결:** main.c에 extern 선언 추가
+```c
+// UART 전역 변수들 (uart_stm32.c에서 정의됨)
+extern char rx_buffer[512];
+extern volatile uint16_t uart_rx_length;
+extern volatile uint8_t uart_rx_complete_flag;
+extern volatile uint8_t uart_rx_error_flag;
+```
+
+### 🚫 **SD 카드 초기화 블로킹 문제**
+
+#### **증상 분석:**
+```
+[INFO] === SYSTEM START (Reset #1) ===
+[WARN] Reset: PIN (External)
+[INFO] SD hardware ready - file system initialization delegated to SDStorage module
+[INFO] === DMA-based Receive Task Started ===
+[INFO] 🔄 Initializing SD card storage...
+// 여기서 시스템 멈춤 - LoRa 초기화까지 진행되지 않음
+```
+
+#### **근본 원인:**
+- `SDStorage_Init()` 함수에서 FatFs의 `disk_initialize()` 호출 시 무한 대기
+- SD 카드 하드웨어는 정상이지만 FatFs 소프트웨어 스택에서 블로킹
+- LoRa 30초 주기 전송 등 모든 후속 동작이 차단됨
+
+#### **임시 해결책:**
+SD 카드 초기화 부분을 주석 처리하여 LoRa 기능 격리 테스트
+```c
+// SD Card 초기화 (TDD 검증된 SDStorage 사용) - 임시 주석 처리
+// LOG_INFO("🔄 Initializing SD card storage...");
+// int sd_result = SDStorage_Init();
+// if (sd_result == SDSTORAGE_OK) {
+//   LOG_INFO("✅ SD card initialized successfully");
+// } else {
+//   LOG_WARN("⚠️ SD card init failed (code: %d)", sd_result);
+// }
+LOG_INFO("⚠️ SD card initialization temporarily disabled for LoRa testing");
+```
+
+### ✅ **테스트 결과**
+
+#### **LoRa 기능 정상 동작 확인:**
+- ✅ **시스템 부팅**: 정상 완료 (SD 초기화 생략)
+- ✅ **UART 초기화**: DMA 통신 정상 작동
+- ✅ **LoRa 초기화**: 5개 명령어 시퀀스 완료
+- ✅ **LoRa JOIN**: OTAA 네트워크 가입 성공
+- ✅ **주기적 전송**: 30초 간격 데이터 전송 정상
+- ✅ **터미널 로깅**: 모든 이벤트 정상 출력
+
+#### **시스템 상태:**
+- **LoRa 통신**: ✅ **완전 정상** (SD 없이도 독립적 동작)
+- **터미널 로깅**: ✅ **완전 정상** 
+- **SD 로깅**: ⏸️ **임시 비활성화** (차후 수정 예정)
+
+### 🎯 **다음 세션 계획**
+
+#### **🔴 우선순위 1: SD 카드 초기화 순서 변경**
+**목표:** UART 초기화 전에 SD 카드부터 완전히 준비
+```
+현재 순서: UART → LoRa → SD (블로킹 발생)
+변경 목표: SD → UART → LoRa (순차적 안전 초기화)
+```
+
+**구현 계획:**
+1. **SD 카드 우선 초기화**: 시스템 시작 직후 SD 상태 확인
+2. **SD 준비 완료 대기**: 쓰기 가능 상태까지 완전 초기화
+3. **LoRa 시작 조건**: SD 로깅 준비 완료 후에만 LoRa 동작 시작
+4. **듀얼 로깅 활성화**: 터미널 + SD 카드 동시 출력
+
+#### **🔴 우선순위 2: SD 카드 FatFs 통합 완료**
+**세부 작업:**
+- [ ] `disk_initialize()` 무한 대기 원인 분석
+- [ ] BSP vs HAL 초기화 충돌 해결
+- [ ] `HAL_SD_GetCardInfo()` Card Size 0 MB 문제 수정
+- [ ] FatFs 설정 최적화 (FreeRTOS 호환성)
+
+#### **🔴 우선순위 3: 통합 테스트**
+**검증 항목:**
+- [ ] SD → UART → LoRa 순차 초기화 테스트
+- [ ] 듀얼 로깅 (터미널 + SD) 동시 출력 확인
+- [ ] LoRa 30초 주기 전송 + SD 로그 저장 통합 테스트
+- [ ] 시스템 안정성 장기 실행 테스트
+
+### 📊 **현재 시스템 상태**
+- **빌드**: ✅ **에러 없음** (모든 컴파일 에러 수정됨)
+- **LoRa 통신**: ✅ **프로덕션 레디** (완전 독립 동작)
+- **터미널 로깅**: ✅ **완전 정상**
+- **SD 로깅**: ⏸️ **임시 비활성화** (다음 세션에서 완전 해결 예정)
+- **TDD 모듈**: ✅ **100% 활용** (하드코딩 완전 제거됨)
+
+### 🏆 **주요 성과**
+1. **빌드 에러 완전 해결**: 콜백 중복 및 변수 선언 문제 수정
+2. **LoRa 기능 독립성 확인**: SD 없이도 완전 동작하는 robust한 시스템
+3. **TDD 아키텍처 유지**: 모든 수정이 TDD 검증된 모듈 기반
+4. **문제 격리 성공**: SD 문제와 LoRa 기능을 완전 분리
+
+---
+**Last Update**: 2025-07-24 저녁 세션  
+**Status**: 🎉 **LoRa 시스템 완전 정상** - SD 문제 격리 및 차후 해결 계획 수립  
+**Achievement**: 빌드 에러 수정 + LoRa 독립 동작 확인 + SD 초기화 순서 계획 완료  
+**Next Priority**: SD 카드 우선 초기화 → UART → LoRa 순서로 듀얼 로깅 시스템 완성

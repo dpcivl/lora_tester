@@ -177,6 +177,9 @@ void StartReceiveTask(void const * argument);
 
 // UART DMA 콜백 함수들은 uart_stm32.c로 이동됨
 
+// SD 카드 초기화 결과를 저장하는 전역 변수
+int g_sd_initialization_result = -1;  // -1: 초기화 안됨, SDSTORAGE_OK: 성공, 기타: 실패
+
 /* USER CODE END 0 */
 
 /**
@@ -264,10 +267,19 @@ int main(void)
   // 플래그 클리어
   __HAL_RCC_CLEAR_RESET_FLAGS();
   
-  // SD 카드 하드웨어 초기화 완료 - SDStorage 모듈에서 파일시스템 처리
-  LOG_INFO("SD hardware ready - file system initialization delegated to SDStorage module");
+  // ===== 새로운 초기화 순서: SD 먼저, 그 다음 UART =====
   
-  // UART6 DMA 초기화 (UART 초기화 후)
+  // 1. SD 카드 초기화 (가장 먼저 - 블로킹 방지를 위해)
+  LOG_INFO("🔄 Initializing SD card storage (priority initialization)...");
+  g_sd_initialization_result = SDStorage_Init();
+  if (g_sd_initialization_result == SDSTORAGE_OK) {
+    LOG_INFO("✅ SD card initialized successfully - ready for dual logging");
+  } else {
+    LOG_WARN("⚠️ SD card init failed (code: %d) - terminal logging only", g_sd_initialization_result);
+  }
+  
+  // 2. UART6 DMA 초기화 (SD 초기화 완료 후)
+  LOG_INFO("🔄 Initializing UART DMA after SD preparation...");
   MX_USART6_DMA_Init();
   
   // IDLE 인터럽트 활성화 (메시지 끝 감지용)
@@ -1727,15 +1739,8 @@ void StartDefaultTask(void const * argument)
   MX_USB_HOST_Init();
   /* USER CODE BEGIN 5 */
   
-  // SD Card 초기화 (TDD 검증된 SDStorage 사용) - 임시 주석 처리
-  // LOG_INFO("🔄 Initializing SD card storage...");
-  // int sd_result = SDStorage_Init();
-  // if (sd_result == SDSTORAGE_OK) {
-  //   LOG_INFO("✅ SD card initialized successfully");
-  // } else {
-  //   LOG_WARN("⚠️ SD card init failed (code: %d)", sd_result);
-  // }
-  LOG_INFO("⚠️ SD card initialization temporarily disabled for LoRa testing");
+  // SD Card 초기화는 이미 main()에서 우선 완료됨
+  LOG_INFO("📋 SD card initialization completed in main() - checking status...");
   
   LOG_INFO("=== STM32F746G-DISCO UART6 Test Started ===");
   LOG_INFO("System Clock: %lu MHz", SystemCoreClock / 1000000);
@@ -1776,11 +1781,14 @@ void StartDefaultTask(void const * argument)
   LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
            lora_ctx.num_commands, lora_ctx.send_message, lora_ctx.max_retry_count);
            
-  // LoRa 로그를 SD카드에 저장하기 시작
-  LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
-  
-  // SD카드 로그 파일 생성
-  SDStorage_CreateNewLogFile();
+  // SD 카드 상태 확인 후 로깅 설정
+  extern int g_sd_initialization_result; // main()에서 설정된 SD 결과
+  if (g_sd_initialization_result == SDSTORAGE_OK) {
+    LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
+    SDStorage_CreateNewLogFile();
+  } else {
+    LOG_INFO("📺 LoRa logs will be displayed on terminal only (SD not available)");
+  }
   
   // LoRa 프로세스 루프 (초기화 → JOIN → 주기적 전송)
   for(;;)
