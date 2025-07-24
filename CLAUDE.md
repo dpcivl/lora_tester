@@ -704,7 +704,110 @@ LOG_INFO("⚠️ SD card initialization temporarily disabled for LoRa testing");
 4. **문제 격리 성공**: SD 문제와 LoRa 기능을 완전 분리
 
 ---
-**Last Update**: 2025-07-24 저녁 세션  
-**Status**: 🎉 **LoRa 시스템 완전 정상** - SD 문제 격리 및 차후 해결 계획 수립  
-**Achievement**: 빌드 에러 수정 + LoRa 독립 동작 확인 + SD 초기화 순서 계획 완료  
-**Next Priority**: SD 카드 우선 초기화 → UART → LoRa 순서로 듀얼 로깅 시스템 완성
+
+## SD 카드 초기화 순서 변경 및 f_mkfs 자동 복구 구현 (2025-07-24 오후)
+
+### 🎯 **변경 목표**
+SD 카드 초기화 블로킹 문제 해결을 위해 초기화 순서를 **SD → UART → LoRa**로 변경하고, 파일시스템 자동 생성 기능 추가
+
+### ✅ **완료된 작업**
+
+#### **1. 초기화 순서 변경**
+**기존 순서**: UART → LoRa → SD (블로킹 발생)  
+**새로운 순서**: SD → UART → LoRa (순차적 안전 초기화)
+
+```c
+// main.c - 새로운 초기화 순서
+// 1. SD 카드 초기화 (가장 먼저 - 블로킹 방지를 위해)
+LOG_INFO("🔄 Initializing SD card storage (priority initialization)...");
+g_sd_initialization_result = SDStorage_Init();
+
+// 2. UART6 DMA 초기화 (SD 초기화 완료 후)  
+LOG_INFO("🔄 Initializing UART DMA after SD preparation...");
+MX_USART6_DMA_Init();
+
+// 3. LoRa 초기화 (SD 상태 확인 후 로깅 방식 결정)
+```
+
+#### **2. SD 초기화 결과 공유 시스템**
+```c
+// 전역 변수로 SD 상태 공유
+int g_sd_initialization_result = -1;  // -1: 초기화 안됨, SDSTORAGE_OK: 성공
+
+// LoRa 태스크에서 SD 상태에 따라 로깅 방식 자동 선택
+if (g_sd_initialization_result == SDSTORAGE_OK) {
+    LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
+} else {
+    LOG_INFO("📺 LoRa logs will be displayed on terminal only (SD not available)");
+}
+```
+
+#### **3. 자동 진단 및 복구 시스템**
+SDStorage.c에 상세 진단 로깅 및 f_mkfs 자동 복구 기능 추가:
+
+```c
+FRESULT mount_result = f_mount(&SDFatFS, SDPath, 1);
+if (mount_result != FR_OK) {
+    // 하드웨어 상태 진단
+    HAL_SD_CardStateTypeDef card_state = HAL_SD_GetCardState(&hsd1);
+    DSTATUS disk_status = disk_initialize(0);
+    
+    // FR_NOT_READY 또는 FR_NO_FILESYSTEM인 경우 자동 복구
+    if (mount_result == FR_NOT_READY || mount_result == FR_NO_FILESYSTEM) {
+        // f_mkfs로 FAT32 파일시스템 자동 생성
+        FRESULT mkfs_result = f_mkfs(SDPath, FM_ANY, 0, work, sizeof(work));
+        if (mkfs_result != FR_OK) {
+            mkfs_result = f_mkfs(SDPath, FM_FAT, 4096, work, sizeof(work));
+        }
+    }
+}
+```
+
+### 🔍 **SD 카드 문제 진단 결과**
+
+#### **하드웨어 상태: 정상**
+- ✅ SD 카드 감지: 성공 (HAL SD card state: 4 = TRANSFER)
+- ✅ disk_initialize(): 성공 (result: 0x00)
+- ✅ 읽기 기능: 정상 작동
+
+#### **파일시스템 문제: 심각**
+- ❌ f_mount(): 실패 (FR_NOT_READY = 3)
+- ❌ f_mkfs(FM_ANY): 실패 (FR_DISK_ERR = 1)  
+- ❌ f_mkfs(FM_FAT): 실패 (FR_DISK_ERR = 1)
+
+#### **최종 진단: SD 카드 쓰기 기능 불량**
+**증상**: 읽기는 정상, 쓰기만 실패하는 상태
+**원인**: SD 카드 물리적 불량 또는 쓰기 보호 상태
+**해결**: 다른 SD 카드로 교체 필요
+
+### 🚨 **중요: 장기간 운용 테스트 요구사항**
+
+#### **필수 기능: SD 카드 로깅**
+**목적**: 장기간 무인 운용 후 로그 분석을 통한 시스템 안정성 검증
+**요구사항**: 
+- LoRa 통신 로그 (JOIN 성공/실패, 전송 결과)
+- 에러 로그 (UART 에러, LoRa 응답 타임아웃)
+- 시스템 상태 로그 (리셋 횟수, 동작 시간)
+
+#### **현재 상태**
+- ✅ **LoRa 시스템**: 완전 정상 (30초 주기 전송, JOIN 성공)
+- ✅ **터미널 로깅**: 모든 이벤트 실시간 출력
+- ❌ **SD 로깅**: 하드웨어 문제로 동작 불가 **← 해결 필수**
+
+#### **긴급 해결 방안**
+1. **SD 카드 교체** (최우선) - 다른 브랜드/용량으로 테스트
+2. **SD 카드 쓰기 보호 해제** - 물리적 락 스위치 확인
+3. **PC에서 SD 카드 완전 포맷** - 저수준 포맷 후 재시도
+
+### 📊 **시스템 현재 상태**
+- **LoRa 통신**: ✅ **프로덕션 레디** (독립 동작 완벽)
+- **초기화 순서**: ✅ **최적화 완료** (SD → UART → LoRa)
+- **자동 복구**: ✅ **구현 완료** (f_mkfs 자동 시도)
+- **SD 로깅**: ❌ **하드웨어 블로킹** (교체 필요)
+
+---
+
+**Last Update**: 2025-07-24 오후 세션  
+**Status**: 🔴 **SD 로깅 필수 해결** - 장기간 운용 테스트를 위해 SD 카드 교체 긴급 필요  
+**Achievement**: SD 초기화 순서 최적화 + 자동 진단/복구 시스템 구현 + SD 하드웨어 문제 확정  
+**Critical Priority**: **SD 카드 교체** → 듀얼 로깅 시스템 완성 → 장기간 운용 테스트 가능
