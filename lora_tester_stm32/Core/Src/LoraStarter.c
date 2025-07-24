@@ -8,6 +8,17 @@
 #include <stdio.h>
 #include <string.h>
 
+// LoRa 기본 초기화 명령어 배열 (TDD에서 검증된 명령어들)
+const char* LORA_DEFAULT_INIT_COMMANDS[] = {
+    "AT\r\n",           // 버전 확인 (연결 테스트)
+    "AT+NWM=1\r\n",     // LoRaWAN 모드 설정
+    "AT+NJM=1\r\n",     // OTAA 모드 설정
+    "AT+CLASS=A\r\n",   // Class A 설정
+    "AT+BAND=7\r\n"     // Asia 923 MHz 대역 설정
+};
+
+const int LORA_DEFAULT_INIT_COMMANDS_COUNT = sizeof(LORA_DEFAULT_INIT_COMMANDS) / sizeof(LORA_DEFAULT_INIT_COMMANDS[0]);
+
 // 상태 이름을 문자열로 변환하는 헬퍼 함수
 static const char* get_state_name(LoraState state) {
     switch(state) {
@@ -30,6 +41,27 @@ void LoraStarter_ConnectUART(const char* port)
 {
     UART_Connect(port);
     LOG_INFO("[LoRa] UART connected to %s", port);
+}
+
+void LoraStarter_InitWithDefaults(LoraStarterContext* ctx, const char* send_message)
+{
+    if (ctx == NULL) return;
+    
+    ctx->state = LORA_STATE_INIT;
+    ctx->cmd_index = 0;
+    ctx->commands = LORA_DEFAULT_INIT_COMMANDS;
+    ctx->num_commands = LORA_DEFAULT_INIT_COMMANDS_COUNT;
+    ctx->send_message = (send_message != NULL) ? send_message : "TEST";
+    ctx->max_retry_count = 3;
+    ctx->send_interval_ms = 300000;  // 5분 간격
+    ctx->last_send_time = 0;
+    ctx->send_count = 0;
+    ctx->error_count = 0;
+    ctx->last_retry_time = 0;
+    ctx->retry_delay_ms = 1000;  // 1초 초기 지연
+    
+    LOG_INFO("[LoRa] Initialized with defaults - Commands: %d, Message: %s", 
+             ctx->num_commands, ctx->send_message);
 }
 
 void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)

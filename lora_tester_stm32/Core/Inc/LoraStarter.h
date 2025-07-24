@@ -1,6 +1,10 @@
 #ifndef LORASTARTER_H
 #define LORASTARTER_H
 
+// LoRa 기본 초기화 명령어 배열 (TDD 검증됨)
+extern const char* LORA_DEFAULT_INIT_COMMANDS[];
+extern const int LORA_DEFAULT_INIT_COMMANDS_COUNT;
+
 typedef enum {
     LORA_STATE_INIT,
     LORA_STATE_SEND_CMD,
@@ -32,5 +36,8 @@ typedef struct {
 
 void LoraStarter_ConnectUART(const char* port);
 void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx);
+
+// 편의 함수: 기본 설정으로 LoraStarter 컨텍스트 초기화
+void LoraStarter_InitWithDefaults(LoraStarterContext* ctx, const char* send_message);
 
 #endif // LORASTARTER_H

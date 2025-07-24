@@ -1869,25 +1869,9 @@ void StartDefaultTask(void const * argument)
   LOG_INFO("📤 [TX_TASK] Waiting for LoRa module boot-up (10 seconds)...");
   osDelay(10000); // 10초 대기 (LoRa 모듈 부팅 완료 대기)
   
-  // LoRa 기본 연결 테스트 + 초기 설정 명령어들
-  const char* lora_init_commands[] = {
-    "AT\r\n",       // 버전 확인 (연결 테스트)
-    "AT+NWM=1\r\n",     // LoRaWAN 모드 설정
-    "AT+NJM=1\r\n",     // OTAA 모드 설정
-    "AT+CLASS=A\r\n",   // Class A 설정
-    "AT+BAND=7\r\n"     // Asia 923 MHz 대역 설정
-  };
-  
-  // LoraStarter 컨텍스트 초기화
-  LoraStarterContext lora_ctx = {
-    .state = LORA_STATE_INIT,
-    .cmd_index = 0,
-    .commands = lora_init_commands,
-    .num_commands = sizeof(lora_init_commands) / sizeof(lora_init_commands[0]),
-    .send_message = "TEST",
-    .max_retry_count = 3,
-    .send_interval_ms = 300000  // 5분 간격
-  };
+  // LoraStarter 컨텍스트 초기화 (TDD 검증된 기본 설정 사용)
+  LoraStarterContext lora_ctx;
+  LoraStarter_InitWithDefaults(&lora_ctx, "TEST");
   
   LOG_INFO("=== LoRa Initialization ===");
   LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
