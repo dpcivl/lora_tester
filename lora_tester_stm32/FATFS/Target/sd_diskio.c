@@ -32,6 +32,9 @@
 #include <stdio.h>
 #include "logger.h"
 
+/* External SD handle */
+extern SD_HandleTypeDef hsd1;
+
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
 
@@ -66,7 +69,7 @@ See BSP_SD_ErrorCallback() and BSP_SD_AbortCallback() below
  * BSP_SD_Init() elsewhere in the application.
  */
 /* USER CODE BEGIN disableSDInit */
-/* #define DISABLE_SD_INIT */
+#define DISABLE_SD_INIT
 /* USER CODE END disableSDInit */
 
 /*
@@ -161,7 +164,9 @@ static DSTATUS SD_CheckStatus(BYTE lun)
 {
   Stat = STA_NOINIT;
 
-  if(BSP_SD_GetCardState() == SD_TRANSFER_OK)
+  // Use HAL function directly instead of BSP
+  HAL_SD_CardStateTypeDef cardState = HAL_SD_GetCardState(&hsd1);
+  if(cardState == HAL_SD_CARD_TRANSFER)
   {
     Stat &= ~STA_NOINIT;
   }

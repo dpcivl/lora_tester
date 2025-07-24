@@ -1,4 +1,5 @@
 #include "SDStorage.h"
+#include "logger.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -39,37 +40,27 @@ static uint32_t _get_current_timestamp(void);
 int SDStorage_Init(void)
 {
 #ifdef STM32F746xx
-    // STM32 환경: FatFs 초기화
+    // STM32 환경: FatFs 초기화 (즉시 마운트로 변경)
     FRESULT mount_result = f_mount(&SDFatFS, SDPath, 1);
     if (mount_result != FR_OK) {
-        // 터미널로 직접 출력 (Logger 사용 시 무한루프 방지)
-        char error_msg[100];
-        sprintf(error_msg, "[SDStorage] f_mount failed: %d\r\n", mount_result);
-        HAL_UART_Transmit(&huart6, (uint8_t*)error_msg, strlen(error_msg), 1000);
+        LOG_ERROR("[SDStorage] f_mount failed: %d", mount_result);
         return SDSTORAGE_ERROR;
     }
     
-    // SD 카드 상태 확인
-    FATFS *fs;
-    DWORD fre_clust;
-    FRESULT free_result = f_getfree(SDPath, &fre_clust, &fs);
-    if (free_result != FR_OK) {
-        char error_msg[100];
-        sprintf(error_msg, "[SDStorage] f_getfree failed: %d\r\n", free_result);
-        HAL_UART_Transmit(&huart6, (uint8_t*)error_msg, strlen(error_msg), 1000);
-        return SDSTORAGE_ERROR;
-    }
+    LOG_INFO("[SDStorage] f_mount successful");
     
-    char success_msg[100];
-    sprintf(success_msg, "[SDStorage] SD Card OK, Free: %lu KB\r\n", fre_clust * fs->csize / 2);
-    HAL_UART_Transmit(&huart6, (uint8_t*)success_msg, strlen(success_msg), 1000);
+    // SD 카드 상태 확인 생략 (f_getfree는 FreeRTOS 환경에서 시스템 멈춤 유발)
+    // 실제 파일 작업 시에 오류로 SD 상태 확인
+    LOG_INFO("[SDStorage] Skipping capacity check - will verify during file operations");
 #else
     // PC/테스트 환경: 시뮬레이션
     // 실제로는 파일 시스템이 준비되었다고 가정
 #endif
 
     // 로그 디렉토리 생성
+    LOG_INFO("[SDStorage] Creating log directory...");
     if (_create_log_directory() != SDSTORAGE_OK) {
+        LOG_ERROR("[SDStorage] Failed to create log directory");
         return SDSTORAGE_ERROR;
     }
     
@@ -77,6 +68,7 @@ int SDStorage_Init(void)
     g_current_log_size = 0;
     memset(g_current_log_file, 0, sizeof(g_current_log_file));
     
+    LOG_INFO("[SDStorage] Initialization completed successfully");
     return SDSTORAGE_OK;
 }
 

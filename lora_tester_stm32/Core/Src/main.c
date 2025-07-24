@@ -22,6 +22,7 @@
 #include "cmsis_os.h"
 #include "fatfs.h"
 #include "usb_host.h"
+#include "bsp_driver_sd.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -365,52 +366,8 @@ int main(void)
   // 플래그 클리어
   __HAL_RCC_CLEAR_RESET_FLAGS();
   
-  // SD카드 완전 초기화
-  static uint32_t init_count = 0;
-  init_count++;
-  LOG_INFO("=== SD Card Complete Initialization (Call #%lu) ===", init_count);
-  
-  // 1. SDMMC 하드웨어 강제 재초기화
-  LOG_INFO("Initial SDMMC1 State: %d", hsd1.State);
-  
-  // SDMMC 재초기화 시도
-  HAL_StatusTypeDef init_result = HAL_SD_Init(&hsd1);
-  LOG_INFO("HAL_SD_Init result: %d", init_result);
-  LOG_INFO("After init SDMMC1 State: %d", hsd1.State);
-  
-  if (init_result == HAL_OK) {
-      // 2. SD카드 정보 확인
-      HAL_SD_CardInfoTypeDef cardInfo;
-      HAL_StatusTypeDef info_result = HAL_SD_GetCardInfo(&hsd1, &cardInfo);
-      LOG_INFO("HAL_SD_GetCardInfo: %d", info_result);
-      
-      if (info_result == HAL_OK) {
-          LOG_INFO("Card Size: %lu MB", (cardInfo.LogBlockNbr * cardInfo.LogBlockSize) / (1024*1024));
-      }
-      
-      // 3. SD카드 상태 확인
-      HAL_SD_CardStateTypeDef cardState = HAL_SD_GetCardState(&hsd1);
-      LOG_INFO("HAL_SD_GetCardState: %d (4=TRANSFER)", cardState);
-      
-      // 4. 디스크 초기화 시도
-      DSTATUS disk_stat = disk_initialize(0);
-      LOG_INFO("disk_initialize result: %d", disk_stat);
-      
-      // 5. 에러 코드별 분석
-      if (disk_stat & STA_NOINIT) LOG_ERROR("- STA_NOINIT: Drive not initialized");
-      if (disk_stat & STA_NODISK) LOG_ERROR("- STA_NODISK: No medium in the drive");  
-      if (disk_stat & STA_PROTECT) LOG_ERROR("- STA_PROTECT: Write protected");
-      
-      if (disk_stat == 0) {  // DSTATUS 0 = 초기화 성공
-          LOG_INFO("✅ SD Card fully initialized - proceeding with file test");
-      } else {
-          LOG_ERROR("❌ disk_initialize failed with status: 0x%02X", disk_stat);
-      }
-  } else {
-      LOG_ERROR("❌ SDMMC hardware initialization failed");
-  }
-  
-  LOG_INFO("=== SD Card diagnosis complete ===");
+  // SD 카드 하드웨어 초기화 완료 - SDStorage 모듈에서 파일시스템 처리
+  LOG_INFO("SD hardware ready - file system initialization delegated to SDStorage module");
   
   // UART6 DMA 초기화 (UART 초기화 후)
   MX_USART6_DMA_Init();
@@ -1140,6 +1097,12 @@ static void MX_SDMMC1_SD_Init(void)
   hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_DISABLE;
   hsd1.Init.ClockDiv = 0;
   /* USER CODE BEGIN SDMMC1_Init 2 */
+  
+  // Initialize SD card with HAL
+  if (HAL_SD_Init(&hsd1) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END SDMMC1_Init 2 */
 
@@ -1866,7 +1829,14 @@ void StartDefaultTask(void const * argument)
   MX_USB_HOST_Init();
   /* USER CODE BEGIN 5 */
   
-  // Logger는 이미 SD카드와 연결됨
+  // SD Card 초기화 (TDD 검증된 SDStorage 사용)
+  LOG_INFO("🔄 Initializing SD card storage...");
+  int sd_result = SDStorage_Init();
+  if (sd_result == SDSTORAGE_OK) {
+    LOG_INFO("✅ SD card initialized successfully");
+  } else {
+    LOG_WARN("⚠️ SD card init failed (code: %d)", sd_result);
+  }
   
   LOG_INFO("=== STM32F746G-DISCO UART6 Test Started ===");
   LOG_INFO("System Clock: %lu MHz", SystemCoreClock / 1000000);

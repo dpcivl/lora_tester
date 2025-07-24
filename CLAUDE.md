@@ -298,8 +298,119 @@ static DSTATUS SD_CheckStatus(BYTE lun) {
 - 🟡 **SD Card Output**: Hardware ready, software blocked
 - 🟡 **Dual Output**: Prepared but not active
 
+## SD Card 디버깅 세션 진행상황 (2025-07-24)
+
+### 🎯 **오늘 세션 목표**
+- SD카드 f_mount() 시스템 멈춤 문제 해결
+- LoRa + SD 듀얼 로깅 시스템 완성
+
+### 📊 **현재 상태 분석**
+
+#### ✅ **정상 작동하는 부분들:**
+- **LoRa 통신**: 완전 정상 작동 (30초 주기 전송, JOIN 성공)
+- **SD 하드웨어**: 3584MB 카드 완벽 인식 
+- **UART 통신**: 터미널 로깅 정상
+
+#### ❌ **문제가 있는 부분들:**
+- **FatFs disk_initialize()**: 계속 STA_NOINIT 반환 (result: 1)
+- **BSP vs HAL 충돌**: 초기화 방식 불일치
+- **Card Size: 0 MB**: HAL_SD_GetCardInfo() 정보 누락
+
+### 🔧 **오늘 시도한 해결방안들**
+
+#### **1. 스택 사이즈 증가 (4096 → 8192)**
+- **결과**: UART 에러 발생으로 되돌림
+- **원인**: 메모리 레이아웃 변경으로 UART DMA 충돌
+- **결론**: 스택 부족이 아닌 다른 원인
+
+#### **2. f_getfree() 제거**
+- **목적**: 시스템 멈춤 방지
+- **결과**: f_mkdir()에서 또 다른 멈춤 발생
+- **결론**: 모든 FatFs 실제 SD 접근 함수가 문제
+
+#### **3. 지연 마운트 → 즉시 마운트 변경**
+- **목적**: 초기화 타이밍 최적화
+- **결과**: f_mount() 자체에서 FR_NO_FILESYSTEM (3) 오류
+
+#### **4. HAL → BSP 초기화 방식 변경**
+- **목적**: FatFs 호환성 개선
+- **결과**: BSP_SD_Init() 실패 (MSD_ERROR)
+- **원인**: HAL과 BSP 이중 초기화 충돌
+
+#### **5. 중복 초기화 제거**
+- **최종 시도**: FatFs가 자동으로 BSP_SD_Init() 호출하도록 함
+- **현재 상태**: 여전히 disk_initialize() 실패
+
+### 📋 **핵심 문제 진단**
+
+#### **A. SD 하드웨어 상태**
+```
+✅ SDMMC1 peripheral: 정상 초기화
+✅ Card detection: PC13 핀 정상 감지
+✅ HAL_SD_Init(): 성공 (result: 0)
+❌ HAL_SD_GetCardInfo(): Card Size = 0 MB (정보 누락)
+❌ disk_initialize(): STA_NOINIT 지속 반환
+```
+
+#### **B. FatFs 설정 상태**
+```
+✅ ffconf.h: FreeRTOS 호환 설정 완료
+✅ 메모리 할당: pvPortMalloc/vPortFree 연결
+✅ 세마포어: CMSIS v1.x 호환
+❌ BSP_SD_Init(): sd_diskio.c에서 실패
+```
+
+#### **C. 추정 근본 원인들**
+1. **STM32CubeMX HAL 초기화와 FatFs BSP 초기화 불일치**
+2. **SD카드 정보 읽기 실패로 인한 파일시스템 인식 불가**
+3. **RTOS 컨텍스트에서 BSP 함수 호출 시 타이밍 문제**
+
+### 💡 **다음 세션 해결 방향**
+
+#### **우선순위 1: BSP_SD_Init() 실패 원인 분석**
+```c
+// sd_diskio.c의 SD_initialize() 함수에서:
+if(BSP_SD_Init() == MSD_OK) {  // ← 여기서 실패
+    Stat = SD_CheckStatus(lun);
+}
+```
+**접근법:**
+- BSP_SD_Init() 내부 로직 분석
+- HAL과 BSP 초기화 순서 최적화
+- 또는 DISABLE_SD_INIT 활성화로 BSP 우회
+
+#### **우선순위 2: HAL_SD_GetCardInfo() 수정**
+```c
+// Card Size: 0 MB 문제 해결
+HAL_StatusTypeDef info_result = HAL_SD_GetCardInfo(&hsd1, &cardInfo);
+// cardInfo.LogBlockNbr, LogBlockSize가 0으로 나오는 원인 분석
+```
+
+#### **우선순위 3: 대안 접근법**
+- **Raw 섹터 접근**: FatFs 우회하고 HAL_SD_ReadBlocks() 직접 사용
+- **다른 파일시스템**: LittleFS 등 대안 고려
+- **터미널 전용**: SD 로깅 포기하고 LoRa 완성도 높이기
+
+### 🎯 **다음 세션 체크리스트**
+
+#### **즉시 확인할 사항들:**
+- [ ] BSP_SD_Init() 실패 상세 분석 (bsp_driver_sd.c 내부)
+- [ ] DISABLE_SD_INIT 플래그 활성화 테스트
+- [ ] HAL_SD_GetCardInfo() 0 MB 문제 해결
+- [ ] sd_diskio.c 설정 재검토
+
+#### **대안 구현 준비:**
+- [ ] 터미널 전용 로깅으로 LoRa 시스템 완성
+- [ ] Raw SD 섹터 접근 방식 프로토타입
+- [ ] 메모리 사용량 최적화
+
+### 📊 **현재 시스템 안정성**
+- **LoRa 통신**: ✅ **프로덕션 레디** (30초 주기 전송 완벽)
+- **터미널 로깅**: ✅ **완전 정상** (모든 이벤트 출력)
+- **SD 로깅**: ❌ **블로킹됨** (disk_initialize 실패)
+
 ---
-**Last Update**: 2025-07-23  
-**Status**: 🟡 LoRa PRODUCTION READY + SD Card Hardware READY + FatFs Integration BLOCKED
-**Current Issue**: FreeRTOS kernel state check in disk_initialize()
-**Next Steps**: Debug FreeRTOS/FatFs integration issue
+**Last Update**: 2025-07-24 오전 세션  
+**Status**: 🟡 LoRa PRODUCTION READY + SD Card Hardware OK + FatFs disk_initialize 실패  
+**Current Blocker**: BSP_SD_Init() MSD_ERROR + HAL_SD_GetCardInfo() 0MB 문제  
+**Next Priority**: BSP vs HAL 초기화 충돌 해결 + DISABLE_SD_INIT 활성화 테스트
