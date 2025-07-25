@@ -30,7 +30,6 @@
 
 #include <string.h>
 #include <stdio.h>
-#include "logger.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -66,7 +65,7 @@ See BSP_SD_ErrorCallback() and BSP_SD_AbortCallback() below
  * BSP_SD_Init() elsewhere in the application.
  */
 /* USER CODE BEGIN disableSDInit */
-/* #define DISABLE_SD_INIT */
+#define DISABLE_SD_INIT  /* BSP_SD_Init() is called in main.c */
 /* USER CODE END disableSDInit */
 
 /*
@@ -224,7 +223,6 @@ Stat = STA_NOINIT;
   }
 
   return Stat;
-
 }
 
 /**

@@ -22,7 +22,6 @@
 #include "cmsis_os.h"
 #include "fatfs.h"
 #include "usb_host.h"
-#include "bsp_driver_sd.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -33,6 +32,7 @@
 #include "ResponseHandler.h"
 #include "Network.h"
 #include "SDStorage.h"
+#include "bsp_driver_sd.h"  // BSP SD 드라이버
 
 // LoraStarter용 로깅 매크로는 logger.h에 정의되어 있음
 
@@ -102,6 +102,8 @@ SAI_HandleTypeDef hsai_BlockA2;
 SAI_HandleTypeDef hsai_BlockB2;
 
 SD_HandleTypeDef hsd1;
+DMA_HandleTypeDef hdma_sdmmc1_rx;
+DMA_HandleTypeDef hdma_sdmmc1_tx;
 
 SPDIFRX_HandleTypeDef hspdif;
 
@@ -116,11 +118,11 @@ TIM_HandleTypeDef htim12;
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart6;
+DMA_HandleTypeDef hdma_usart6_rx;  // UART6 DMA 핸들
 
 SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
-osThreadId receiveTaskHandle;
 /* USER CODE BEGIN PV */
 
 // 수신 태스크용 전역 변수
@@ -164,9 +166,7 @@ static void MX_TIM8_Init(void);
 static void MX_TIM12_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART6_UART_Init(void);
-void MX_USART6_DMA_Init(void);  // USART6 DMA 초기화 함수 선언
 void StartDefaultTask(void const * argument);
-void StartReceiveTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -180,6 +180,9 @@ void StartReceiveTask(void const * argument);
 // SD 카드 초기화 결과를 저장하는 전역 변수
 int g_sd_initialization_result = -1;  // -1: 초기화 안됨, SDSTORAGE_OK: 성공, 기타: 실패
 
+// SD 카드 HAL 테스트 결과 (SDStorage 모듈에서 접근)
+int mismatch_count = -1;  // -1: 테스트 안됨, 0: 성공, >0: 실패
+
 /* USER CODE END 0 */
 
 /**
@@ -188,6 +191,7 @@ int g_sd_initialization_result = -1;  // -1: 초기화 안됨, SDSTORAGE_OK: 성
   */
 int main(void)
 {
+
   /* USER CODE BEGIN 1 */
   // 리셋 카운터 추가
   static uint32_t reset_count = 0;
@@ -215,8 +219,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();  // DMA는 UART보다 먼저 초기화
-//  MX_USART6_DMA_Init();  // USART6 DMA 초기화 (UART보다 먼저)
+  MX_DMA_Init();
   MX_ADC3_Init();
   MX_CRC_Init();
   MX_DCMI_Init();
@@ -240,12 +243,6 @@ int main(void)
   MX_TIM12_Init();
   MX_USART1_UART_Init();
   MX_USART6_UART_Init();
-  
-  // UART 초기화 후 DMA 핸들 다시 연결 (HAL_UART_Init에서 리셋될 수 있음)
-  __HAL_LINKDMA(&huart6, hdmarx, hdma_usart6_rx);
-  
-  // UART IDLE 인터럽트 활성화 (DMA 기반 수신을 위해)
-  __HAL_UART_ENABLE_IT(&huart6, UART_IT_IDLE);
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
   
@@ -306,14 +303,15 @@ int main(void)
   /* USER CODE BEGIN RTOS_THREADS */
   /* 수신 태스크 생성 - 백그라운드에서 계속 실행 */
   osThreadDef(receiveTask, StartReceiveTask, osPriorityNormal, 0, 2048);
-  receiveTaskHandle = osThreadCreate(osThread(receiveTask), NULL);
+  osThreadId receiveTaskHandle_local = osThreadCreate(osThread(receiveTask), NULL);
+  (void)receiveTaskHandle_local;  // 사용하지 않는 변수 경고 방지
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
   osKernelStart();
 
   /* We should never get here as control is now taken by the scheduler */
-  
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -998,15 +996,28 @@ static void MX_SDMMC1_SD_Init(void)
   hsd1.Init.ClockEdge = SDMMC_CLOCK_EDGE_RISING;
   hsd1.Init.ClockBypass = SDMMC_CLOCK_BYPASS_DISABLE;
   hsd1.Init.ClockPowerSave = SDMMC_CLOCK_POWER_SAVE_DISABLE;
-  hsd1.Init.BusWide = SDMMC_BUS_WIDE_1B;  // ST 커뮤니티 가이드: 1-bit 모드로 변경
+  hsd1.Init.BusWide = SDMMC_BUS_WIDE_4B;
   hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_DISABLE;
-  hsd1.Init.ClockDiv = 2;  // 클럭 속도 낮춤 (새로운 SD카드 호환성 개선)
+  hsd1.Init.ClockDiv = 0;
   /* USER CODE BEGIN SDMMC1_Init 2 */
   
-  // Initialize SD card with HAL
-  if (HAL_SD_Init(&hsd1) != HAL_OK)
+  // Initialize SD card with BSP (replaces HAL for FatFs integration)
+  // Note: BSP_SD_Init() will call HAL_SD_Init() internally
+  // This ensures proper integration with FatFs middleware
+  uint8_t bsp_result = BSP_SD_Init();
+  if (bsp_result != MSD_OK)
   {
-    Error_Handler();
+    // BSP initialization failed - more detailed error handling
+    if (bsp_result == MSD_ERROR_SD_NOT_PRESENT) {
+      // SD card not detected - continue without SD
+      LOG_ERROR("SD card not detected during BSP initialization");
+    } else {
+      // Other BSP error - still continue
+      LOG_ERROR("BSP SD initialization failed with code: %d", bsp_result);
+    }
+    // Don't call Error_Handler() to allow system to continue without SD
+  } else {
+    LOG_INFO("BSP SD initialization successful - ready for FatFs integration");
   }
 
   /* USER CODE END SDMMC1_Init 2 */
@@ -1505,6 +1516,25 @@ static void MX_USART6_UART_Init(void)
 
 }
 
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Stream3_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
+  /* DMA2_Stream6_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream6_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream6_IRQn);
+
+}
+
 /* FMC initialization function */
 static void MX_FMC_Init(void)
 {
@@ -1785,103 +1815,110 @@ void StartDefaultTask(void const * argument)
   LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
            lora_ctx.num_commands, lora_ctx.send_message, lora_ctx.max_retry_count);
            
-  // SD 카드 기본 쓰기 기능 테스트
+  // SD 카드 기본 쓰기 기능 테스트 (BSP 기반)
   extern int g_sd_initialization_result; // main()에서 설정된 SD 결과
   if (g_sd_initialization_result == SDSTORAGE_OK) {
-    LOG_INFO("🧪 Testing basic SD card write functionality...");
+    LOG_INFO("🧪 Testing basic SD card write functionality with BSP drivers...");
     
-    // HAL 레벨 직접 쓰기/읽기 테스트
-    extern SD_HandleTypeDef hsd1;
-    static uint8_t test_write_buffer[512];
-    static uint8_t test_read_buffer[512];
+    // BSP 레벨 쓰기/읽기 테스트
+    static uint32_t test_write_buffer[128];  // 512 bytes = 128 uint32_t
+    static uint32_t test_read_buffer[128];
     
     // 테스트 데이터 준비 (간단한 패턴)
-    for(int i = 0; i < 512; i++) {
-      test_write_buffer[i] = (uint8_t)(i % 256);
+    for(int i = 0; i < 128; i++) {
+      test_write_buffer[i] = (uint32_t)(0xAA55AA55 + i);  // 테스트 패턴
     }
     
-    // SD카드 상태 재확인
-    HAL_SD_CardStateTypeDef card_state_before = HAL_SD_GetCardState(&hsd1);
-    LOG_INFO("📋 SD card state before write: %d", card_state_before);
+    // BSP SD 카드 상태 확인
+    uint8_t card_state = BSP_SD_GetCardState();
+    LOG_INFO("📋 BSP SD card state: %d (0=TRANSFER_OK, 1=TRANSFER_BUSY)", card_state);
     
-    // SD카드 정보 확인
-    HAL_SD_CardInfoTypeDef card_info;
-    HAL_StatusTypeDef info_result = HAL_SD_GetCardInfo(&hsd1, &card_info);
-    LOG_INFO("📋 HAL_SD_GetCardInfo result: %d", info_result);
-    if(info_result == HAL_OK) {
-      LOG_INFO("📋 Card LogBlockNbr: %lu, LogBlockSize: %lu", card_info.LogBlockNbr, card_info.LogBlockSize);
-      LOG_INFO("📋 Card Type: %lu, Class: %lu", card_info.CardType, card_info.Class);
-    }
+    // BSP SD 카드 정보 확인
+    BSP_SD_CardInfo card_info;
+    BSP_SD_GetCardInfo(&card_info);
+    LOG_INFO("📋 Card LogBlockNbr: %lu, LogBlockSize: %lu", card_info.LogBlockNbr, card_info.LogBlockSize);
+    LOG_INFO("📋 Card Type: %lu, Class: %lu", card_info.CardType, card_info.Class);
     
-    LOG_INFO("📝 Writing test pattern to sector 2000...");
-    HAL_StatusTypeDef write_result = HAL_SD_WriteBlocks(&hsd1, test_write_buffer, 2000, 1, 5000);
-    LOG_INFO("📝 HAL_SD_WriteBlocks result: %d", write_result);
+    LOG_INFO("📝 Writing test pattern to sector 2000 using BSP...");
+    uint8_t write_result = BSP_SD_WriteBlocks(test_write_buffer, 2000, 1, 5000);
+    LOG_INFO("📝 BSP_SD_WriteBlocks result: %d (0=MSD_OK)", write_result);
     
-    // 쓰기 실패 시 에러 상태 분석
-    if(write_result != HAL_OK) {
-      HAL_SD_CardStateTypeDef card_state_after = HAL_SD_GetCardState(&hsd1);
-      LOG_ERROR("📋 SD card state after failed write: %d", card_state_after);
-      LOG_ERROR("📋 SDMMC ErrorCode: 0x%08lX", hsd1.ErrorCode);
+    // BSP 쓰기 실패 시 에러 분석
+    if(write_result != MSD_OK) {
+      uint8_t card_state_after = BSP_SD_GetCardState();
+      LOG_ERROR("📋 BSP SD card state after failed write: %d", card_state_after);
       
-      // 일반적인 HAL 상태 코드 해석
+      // BSP 에러 코드 해석
       switch(write_result) {
-        case HAL_ERROR:
-          LOG_ERROR("📋 HAL_ERROR - General error occurred");
+        case MSD_ERROR:
+          LOG_ERROR("📋 MSD_ERROR - General BSP error occurred");
           break;
-        case HAL_BUSY:
-          LOG_ERROR("📋 HAL_BUSY - SD card is busy");
-          break;
-        case HAL_TIMEOUT:
-          LOG_ERROR("📋 HAL_TIMEOUT - Operation timed out");
+        case MSD_ERROR_SD_NOT_PRESENT:
+          LOG_ERROR("📋 MSD_ERROR_SD_NOT_PRESENT - SD card not present");
           break;
         default:
-          LOG_ERROR("📋 Unknown HAL status: %d", write_result);
+          LOG_ERROR("📋 Unknown BSP status: %d", write_result);
           break;
       }
+    } else {
+      LOG_INFO("📝 BSP write test successful");
     }
     
-    if(write_result == HAL_OK) {
-      // 쓰기 후 약간의 지연
+    // 테스트 결과 변수 (SDStorage와 호환성 유지)
+    static int bsp_test_result = -1;  // 초기값: 테스트 안됨
+    
+    if(write_result == MSD_OK) {
+      // 쓰기 후 안정화 대기
       osDelay(100);
       
-      LOG_INFO("📖 Reading back from sector 2000...");
-      HAL_StatusTypeDef read_result = HAL_SD_ReadBlocks(&hsd1, test_read_buffer, 2000, 1, 5000);
-      LOG_INFO("📖 HAL_SD_ReadBlocks result: %d", read_result);
+      LOG_INFO("📖 Reading back from sector 2000 using BSP...");
+      uint8_t read_result = BSP_SD_ReadBlocks(test_read_buffer, 2000, 1, 5000);
+      LOG_INFO("📖 BSP_SD_ReadBlocks result: %d (0=MSD_OK)", read_result);
       
-      if(read_result == HAL_OK) {
-        // 데이터 검증
+      if(read_result == MSD_OK) {
+        // 데이터 검증 (uint32_t 단위로 비교)
         int match_count = 0;
-        int mismatch_count = 0;
+        int mismatch_count = 0;  // 실제 mismatch 계산
         
-        for(int i = 0; i < 512; i++) {
+        for(int i = 0; i < 128; i++) {
           if(test_write_buffer[i] == test_read_buffer[i]) {
             match_count++;
           } else {
             mismatch_count++;
             if(mismatch_count <= 5) { // 처음 5개 불일치만 출력
-              LOG_WARN("📊 Mismatch at byte %d: wrote 0x%02X, read 0x%02X", 
+              LOG_WARN("📊 Mismatch at word %d: wrote 0x%08lX, read 0x%08lX", 
                        i, test_write_buffer[i], test_read_buffer[i]);
             }
           }
         }
         
-        LOG_INFO("📊 Data verification: %d matches, %d mismatches out of 512 bytes", 
+        LOG_INFO("📊 BSP data verification: %d matches, %d mismatches out of 128 words", 
                  match_count, mismatch_count);
         
         if(mismatch_count == 0) {
-          LOG_INFO("✅ SD card basic write/read test PASSED - data integrity OK");
+          LOG_INFO("✅ BSP SD card write/read test PASSED - data integrity OK");
+          bsp_test_result = 0;  // 성공
         } else {
-          LOG_WARN("⚠️ SD card write/read test FAILED - data corruption detected");
-          LOG_WARN("💡 SD card may have wear-out or controller issues");
+          LOG_WARN("⚠️ BSP SD card write/read test FAILED - data corruption detected");
+          bsp_test_result = mismatch_count;  // 불일치 개수
         }
       } else {
-        LOG_ERROR("❌ Read back failed after successful write");
+        LOG_ERROR("❌ BSP read back failed after successful write");
+        bsp_test_result = 999;  // 읽기 실패
       }
     } else {
-      LOG_ERROR("❌ Basic write test failed");
+      LOG_ERROR("❌ BSP write test failed");
+      bsp_test_result = 999;  // 쓰기 실패
     }
     
-    LOG_INFO("📺 Continuing with terminal-only logging for LoRa operations");
+    // BSP 테스트 결과 요약
+    if(bsp_test_result == 0) {
+      LOG_INFO("🗂️ BSP SD test passed - ready for FatFs file operations");
+    } else {
+      LOG_WARN("⚠️ BSP SD test failed - may affect file system operations");
+    }
+    
+    LOG_INFO("📺 Continuing with LoRa operations...");
   } else {
     LOG_INFO("📺 LoRa logs will be displayed on terminal only (SD not available)");
   }
@@ -1959,115 +1996,6 @@ idle_loop:
   /* USER CODE END 5 */
 }
 
-/* USER CODE BEGIN Header_StartReceiveTask */
-/**
-  * @brief  Function implementing the receiveTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartReceiveTask */
-void StartReceiveTask(void const * argument)
-{
-  /* USER CODE BEGIN StartReceiveTask */
-  LOG_INFO("=== DMA-based Receive Task Started ===");
-  
-  // UART 초기화 대기
-  osDelay(2000);
-  
-  // TDD 모듈들을 사용한 DMA 기반 수신 태스크
-  char local_buffer[512];
-  int local_bytes_received = 0;
-  
-  for(;;)
-  {
-    // TDD UART 모듈을 통한 DMA 기반 수신 체크
-    UartStatus status = UART_Receive(local_buffer, sizeof(local_buffer), &local_bytes_received);
-    
-    // 디버깅용: 수신 상태 체크 (에러 상태일 때만)
-    static uint32_t debug_counter = 0;
-    debug_counter++;
-    if (debug_counter % 200 == 0 && status != UART_STATUS_TIMEOUT) {  // 10초마다, 타임아웃 제외
-      LOG_INFO("[RX_TASK] Status check #%lu: status=%d, bytes=%d", 
-               debug_counter / 200, status, local_bytes_received);
-    }
-    
-    if (status == UART_STATUS_OK && local_bytes_received > 0) {
-      // 수신 완료 - TDD ResponseHandler로 분석
-      LOG_INFO("📥 RECV: '%s' (%d bytes)", local_buffer, local_bytes_received);
-      
-      // TDD ResponseHandler를 사용하여 응답 분석
-      if (is_response_ok(local_buffer)) {
-        LOG_INFO("✅ OK response");
-      } else if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
-        LOG_INFO("✅ JOIN response");
-      } else if (strstr(local_buffer, "RAKwireless") != NULL) {
-        LOG_INFO("📡 LoRa module boot message (ignored)");
-      } else {
-        ResponseType response_type = ResponseHandler_ParseSendResponse(local_buffer);
-        switch (response_type) {
-          case RESPONSE_OK:
-            LOG_INFO("✅ OK");
-            break;
-          case RESPONSE_ERROR:
-            LOG_WARN("⚠️ ERROR");
-            break;
-          case RESPONSE_TIMEOUT:
-            LOG_WARN("⚠️ TIMEOUT");
-            break;
-          case RESPONSE_UNKNOWN:
-            LOG_INFO("❓ UNKNOWN format: %.20s...", local_buffer);  // 처음 20자만 표시
-            break;
-        }
-      }
-      
-      // 전역 변수에 복사 (다른 태스크에서 사용 가능)
-      memcpy(rx_buffer, local_buffer, local_bytes_received);
-      rx_bytes_received = local_bytes_received;
-      
-      // LoRa 상태 머신에 전달할 응답만 필터링
-      bool is_lora_command_response = false;
-      
-      if (is_response_ok(local_buffer)) {
-        // OK 응답 - LoRa 명령에 대한 응답
-        is_lora_command_response = true;
-      } else if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
-        // JOIN 성공 응답
-        is_lora_command_response = true;
-      } else if (strstr(local_buffer, "+EVT:") != NULL) {
-        // 기타 LoRa 이벤트 응답들
-        is_lora_command_response = true;
-      } else if (strstr(local_buffer, "RAKwireless") != NULL || strstr(local_buffer, "ORAKwireless") != NULL) {
-        // 부트 메시지 - LoRa 상태 머신에 전달하지 않음
-        LOG_DEBUG("[RX_TASK] Boot message filtered out from LoRa state machine");
-      } else {
-        // 기타 응답들 (ERROR, TIMEOUT 등)
-        ResponseType response_type = ResponseHandler_ParseSendResponse(local_buffer);
-        if (response_type != RESPONSE_UNKNOWN) {
-          is_lora_command_response = true;
-        }
-      }
-      
-      // LoRa 명령 응답만 전역 변수에 복사
-      if (is_lora_command_response) {
-        memcpy(lora_rx_response, local_buffer, local_bytes_received);
-        lora_rx_response[local_bytes_received] = '\0';
-        lora_new_response = true;
-        LOG_DEBUG("[RX_TASK] LoRa response forwarded to state machine: %.20s...", local_buffer);
-      }
-      
-      // 버퍼 클리어
-      memset(local_buffer, 0, sizeof(local_buffer));
-      local_bytes_received = 0;
-    }
-    
-    // DMA 기반이므로 긴 지연으로 CPU 사용률 감소
-    osDelay(50);  // 50ms 지연 (DMA가 백그라운드에서 처리하므로 빠른 폴링 불필요)
-  }
-  /* USER CODE END StartReceiveTask */
-}
-
-
-
 /**
   * @brief  Period elapsed callback in non blocking mode
   * @note   This function is called  when TIM6 interrupt took place, inside
@@ -2088,6 +2016,65 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* USER CODE BEGIN Callback 1 */
 
   /* USER CODE END Callback 1 */
+}
+
+/**
+  * @brief USART6 DMA Initialization Function
+  * @param None
+  * @retval None
+  */
+void MX_USART6_DMA_Init(void)
+{
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Stream1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
+
+  /* Configure DMA2_Stream1 */
+  hdma_usart6_rx.Instance = DMA2_Stream1;
+  hdma_usart6_rx.Init.Channel = DMA_CHANNEL_5;
+  hdma_usart6_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
+  hdma_usart6_rx.Init.PeriphInc = DMA_PINC_DISABLE;
+  hdma_usart6_rx.Init.MemInc = DMA_MINC_ENABLE;
+  hdma_usart6_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+  hdma_usart6_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+  hdma_usart6_rx.Init.Mode = DMA_NORMAL;
+  hdma_usart6_rx.Init.Priority = DMA_PRIORITY_HIGH;
+  hdma_usart6_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+  
+  if (HAL_DMA_Init(&hdma_usart6_rx) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* Associate the initialized DMA handle to the UART handle */
+  __HAL_LINKDMA(&huart6, hdmarx, hdma_usart6_rx);
+}
+
+/**
+  * @brief  Function implementing the receiveTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+void StartReceiveTask(void const * argument)
+{
+  /* USER CODE BEGIN StartReceiveTask */
+  LOG_INFO("=== DMA-based Receive Task Started ===");
+  
+  /* Infinite loop */
+  for(;;)
+  {
+    // DMA 기반 수신은 uart_stm32.c의 콜백에서 처리됨
+    // 이 태스크는 주기적으로 시스템 상태만 확인
+    osDelay(5000);  // 5초마다 실행
+    
+    // 주기적 상태 체크 (필요시)
+    // LOG_DEBUG("=== Receive Task heartbeat ===");
+  }
+  /* USER CODE END StartReceiveTask */
 }
 
 /**
@@ -2121,51 +2108,3 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
-/**
-  * @brief DMA Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_DMA_Init(void)
-{
-  /* DMA controller clock enable */
-  __HAL_RCC_DMA2_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA2_Stream1_IRQn interrupt configuration - USART6_RX */
-  HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
-  
-  /* USART6_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(USART6_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(USART6_IRQn);
-}
-
-/**
-  * @brief DMA2 Stream1 DMA configuration for USART6 RX
-  * @param None
-  * @retval None
-  */
-void MX_USART6_DMA_Init(void)
-{
-  /* Configure DMA for USART6 RX */
-  hdma_usart6_rx.Instance = DMA2_Stream1;
-  hdma_usart6_rx.Init.Channel = DMA_CHANNEL_5;
-  hdma_usart6_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
-  hdma_usart6_rx.Init.PeriphInc = DMA_PINC_DISABLE;
-  hdma_usart6_rx.Init.MemInc = DMA_MINC_ENABLE;
-  hdma_usart6_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
-  hdma_usart6_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-  hdma_usart6_rx.Init.Mode = DMA_NORMAL;    // 일반 모드로 변경
-  hdma_usart6_rx.Init.Priority = DMA_PRIORITY_HIGH;
-  hdma_usart6_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
-  
-  if (HAL_DMA_Init(&hdma_usart6_rx) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /* Associate the initialized DMA handle to the UART handle */
-  __HAL_LINKDMA(&huart6, hdmarx, hdma_usart6_rx);
-}

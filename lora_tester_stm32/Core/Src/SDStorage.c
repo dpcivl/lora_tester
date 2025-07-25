@@ -3,10 +3,12 @@
 #include <string.h>
 #include <stdio.h>
 
-// 플랫폼별 HAL 헤더
+// 플랫폼별 BSP 헤더 (FatFs 미들웨어와 통합)
 #ifdef STM32F746xx
 #include "stm32f7xx_hal.h"
+#include "bsp_driver_sd.h"  // BSP SD 드라이버
 extern UART_HandleTypeDef huart6;
+extern RTC_HandleTypeDef hrtc;
 #endif
 
 // 플랫폼별 조건부 컴파일
@@ -40,102 +42,99 @@ static uint32_t _get_current_timestamp(void);
 int SDStorage_Init(void)
 {
 #ifdef STM32F746xx
-    // STM32 환경: FatFs 초기화 및 진단
-    LOG_INFO("[SDStorage] Starting SD card initialization...");
+    // STM32 환경: BSP 기반 FatFs 통합 초기화
+    LOG_INFO("[SDStorage] Starting BSP-based SD card initialization...");
     
-    // 1. 하드웨어 상태 진단
-    extern SD_HandleTypeDef hsd1;
-    HAL_SD_CardStateTypeDef card_state = HAL_SD_GetCardState(&hsd1);
-    LOG_INFO("[SDStorage] HAL SD card state: %d", card_state);
+    // 1. BSP SD 드라이버 초기화 (FatFs와 완전 통합)
+    uint8_t bsp_result = BSP_SD_Init();
+    LOG_INFO("[SDStorage] BSP_SD_Init result: %d (0=OK, 1=ERROR, 2=NOT_PRESENT)", bsp_result);
     
-    DSTATUS disk_status = disk_initialize(0);
-    LOG_INFO("[SDStorage] disk_initialize result: 0x%02X", disk_status);
-    
-    // disk_initialize 실패 시 조기 종료 (블로킹 방지)
-    if (disk_status != 0) {
-        LOG_ERROR("[SDStorage] disk_initialize failed - SD card not ready");
-        LOG_ERROR("[SDStorage] Possible causes: write-protected, bad card, or BSP/HAL conflict");
+    if (bsp_result != MSD_OK) {
+        if (bsp_result == MSD_ERROR_SD_NOT_PRESENT) {
+            LOG_ERROR("[SDStorage] SD card not detected - check physical connection");
+        } else {
+            LOG_ERROR("[SDStorage] BSP SD initialization failed");
+        }
         return SDSTORAGE_ERROR;
     }
     
-    // 2. 파일시스템 마운트 시도 (지연 마운트로 변경 - 블로킹 방지)
-    LOG_INFO("[SDStorage] Using deferred mount (flag=0) to avoid blocking...");
+    // 2. BSP SD 카드 상태 확인
+    uint8_t card_state = BSP_SD_GetCardState();
+    LOG_INFO("[SDStorage] BSP SD card state: %d (0=TRANSFER_OK, 1=TRANSFER_BUSY)", card_state);
     
-    // f_mount 호출 전에 약간의 지연 (SD 카드 안정화)
-    #ifdef STM32F746xx
-    HAL_Delay(100);
-    #endif
-    
-    // 지연 마운트: 실제 파일 접근 시까지 마운트 지연 (거의 항상 성공)
-    FRESULT mount_result = f_mount(&SDFatFS, SDPath, 0);
-    LOG_INFO("[SDStorage] f_mount(deferred) result: %d", mount_result);
-    
-    // 지연 마운트 성공 시 실제 SD 상태는 첫 파일 작업에서 확인됨
-    if (mount_result == FR_OK) {
-        LOG_INFO("[SDStorage] Deferred mount successful - SD will be tested on first file operation");
+    if (card_state != SD_TRANSFER_OK) {
+        LOG_WARN("[SDStorage] SD card not ready for transfer - state: %d", card_state);
+        // 잠시 대기 후 재확인
+        HAL_Delay(100);
+        card_state = BSP_SD_GetCardState();
+        LOG_INFO("[SDStorage] SD card state after delay: %d", card_state);
     }
     
+    // 3. FatFs disk_initialize (BSP와 완전 통합됨)
+    DSTATUS disk_status = disk_initialize(0);
+    LOG_INFO("[SDStorage] FatFs disk_initialize result: 0x%02X (0x00=OK)", disk_status);
+    
+    if (disk_status != 0) {
+        LOG_ERROR("[SDStorage] FatFs disk initialization failed - code: 0x%02X", disk_status);
+        return SDSTORAGE_ERROR;
+    }
+    
+    // 4. 파일시스템 마운트 (즉시 마운트로 변경 - BSP 안정성 확보됨)
+    LOG_INFO("[SDStorage] Mounting file system with BSP integration...");
+    FRESULT mount_result = f_mount(&SDFatFS, SDPath, 1);  // 즉시 마운트
+    LOG_INFO("[SDStorage] f_mount result: %d (0=FR_OK)", mount_result);
+    
     if (mount_result != FR_OK) {
-        LOG_WARN("[SDStorage] f_mount failed, attempting file system creation...");
+        LOG_WARN("[SDStorage] Mount failed, attempting file system creation...");
         
-        // 3. 파일시스템 자동 생성 시도 (ST 커뮤니티 가이드 기반)
+        // 파일시스템 자동 생성 시도
         if (mount_result == FR_NOT_READY || mount_result == FR_NO_FILESYSTEM) {
-            // 작업 버퍼 할당 (전역 또는 스택)
             static BYTE work[_MAX_SS];
             
-            // FM_ANY로 먼저 시도
+            LOG_INFO("[SDStorage] Creating file system...");
             FRESULT mkfs_result = f_mkfs(SDPath, FM_ANY, 0, work, sizeof(work));
-            LOG_INFO("[SDStorage] f_mkfs(FM_ANY) result: %d", mkfs_result);
+            LOG_INFO("[SDStorage] f_mkfs result: %d", mkfs_result);
             
             if (mkfs_result != FR_OK) {
-                // FAT32 강제 생성 시도 (4096 클러스터 사이즈)
-                mkfs_result = f_mkfs(SDPath, FM_FAT32, 4096, work, sizeof(work));
-                LOG_INFO("[SDStorage] f_mkfs(FM_FAT32) result: %d", mkfs_result);
-                
-                if (mkfs_result != FR_OK) {
-                    LOG_ERROR("[SDStorage] File system creation failed: %d", mkfs_result);
-                    LOG_ERROR("[SDStorage] Possible SD card hardware issue - try different card");
-                    return SDSTORAGE_ERROR;
-                }
+                LOG_ERROR("[SDStorage] File system creation failed: %d", mkfs_result);
+                return SDSTORAGE_ERROR;
             }
             
-            // 파일시스템 생성 후 재마운트 시도
+            // 재마운트
             mount_result = f_mount(&SDFatFS, SDPath, 1);
-            LOG_INFO("[SDStorage] Re-mount after mkfs result: %d", mount_result);
+            LOG_INFO("[SDStorage] Re-mount after mkfs: %d", mount_result);
             
             if (mount_result != FR_OK) {
-                LOG_ERROR("[SDStorage] Re-mount failed after mkfs: %d", mount_result);
+                LOG_ERROR("[SDStorage] Re-mount failed: %d", mount_result);
                 return SDSTORAGE_ERROR;
             }
         } else {
-            LOG_ERROR("[SDStorage] Mount failed with unrecoverable error: %d", mount_result);
+            LOG_ERROR("[SDStorage] Mount failed with error: %d", mount_result);
             return SDSTORAGE_ERROR;
         }
     }
     
-    LOG_INFO("[SDStorage] File system mount successful");
+    LOG_INFO("[SDStorage] BSP-FatFs integration successful");
 #else
     // PC/테스트 환경: 시뮬레이션
-    LOG_INFO("[SDStorage] Test environment - simulating successful initialization");
+    LOG_INFO("[SDStorage] Test environment - simulating BSP initialization");
 #endif
 
-    // 로그 디렉토리 생성 (지연 마운트 후 첫 실제 파일 작업)
-    LOG_INFO("[SDStorage] Creating log directory (first real SD operation)...");
+    // 로그 디렉토리 생성
+    LOG_INFO("[SDStorage] Creating log directory...");
     int dir_result = _create_log_directory();
     if (dir_result != SDSTORAGE_OK) {
-        LOG_ERROR("[SDStorage] Failed to create log directory - SD card may have write issues");
-        LOG_WARN("[SDStorage] Continuing without SD logging - terminal only mode");
-        // SD 문제가 있어도 계속 진행 (terminal logging만 사용)
-        g_sd_ready = false;  // SD 비활성화
+        LOG_ERROR("[SDStorage] Failed to create log directory");
+        LOG_WARN("[SDStorage] Continuing with terminal-only logging");
+        g_sd_ready = false;
         return SDSTORAGE_ERROR;
     }
-    LOG_INFO("[SDStorage] Log directory created successfully");
     
     g_sd_ready = true;
     g_current_log_size = 0;
     memset(g_current_log_file, 0, sizeof(g_current_log_file));
     
-    LOG_INFO("[SDStorage] Initialization completed successfully");
+    LOG_INFO("[SDStorage] BSP-based SD storage initialization completed successfully");
     return SDSTORAGE_OK;
 }
 
@@ -237,29 +236,42 @@ int SDStorage_CreateNewLogFile(void)
         return SDSTORAGE_ERROR;
     }
     
-    // 파일 생성 확인 (SD 쓰기 문제로 인한 블로킹 방지)
+    // BSP 기반 파일 생성
 #ifdef STM32F746xx
-    LOG_INFO("[SDStorage] Attempting to create log file: %s", g_current_log_file);
+    LOG_INFO("[SDStorage] Creating log file with BSP integration: %s", g_current_log_file);
     
-    // f_open 호출 전 로깅
-    LOG_INFO("[SDStorage] Calling f_open with FA_CREATE_NEW | FA_WRITE...");
     FRESULT open_result = f_open(&g_log_file, g_current_log_file, FA_CREATE_NEW | FA_WRITE);
-    LOG_INFO("[SDStorage] f_open result: %d", open_result);
+    LOG_INFO("[SDStorage] f_open result: %d (0=FR_OK)", open_result);
     
     if (open_result != FR_OK) {
-        LOG_ERROR("[SDStorage] f_open failed: %d - SD write problem detected", open_result);
-        LOG_WARN("[SDStorage] Disabling SD logging due to file creation failure");
-        g_sd_ready = false;  // SD 로깅 비활성화
-        return SDSTORAGE_FILE_ERROR;
+        if (open_result == FR_EXIST) {
+            LOG_WARN("[SDStorage] File already exists - trying with different timestamp");
+            // 타임스탬프 재생성으로 재시도
+            HAL_Delay(1000);  // 1초 대기로 다른 타임스탬프 확보
+            if (_generate_log_filename(g_current_log_file, sizeof(g_current_log_file)) == SDSTORAGE_OK) {
+                open_result = f_open(&g_log_file, g_current_log_file, FA_CREATE_NEW | FA_WRITE);
+                if (open_result == FR_OK) {
+                    LOG_INFO("[SDStorage] File created with new timestamp");
+                } else {
+                    LOG_ERROR("[SDStorage] File creation failed even with new timestamp: %d", open_result);
+                    g_sd_ready = false;
+                    return SDSTORAGE_FILE_ERROR;
+                }
+            }
+        } else {
+            LOG_ERROR("[SDStorage] File creation failed: %d", open_result);
+            g_sd_ready = false;
+            return SDSTORAGE_FILE_ERROR;
+        }
     }
     
-    LOG_INFO("[SDStorage] File created successfully, closing...");
+    // 파일 생성 성공 - 닫기
     f_close(&g_log_file);
     g_file_open = false;
-    LOG_INFO("[SDStorage] File closed, ready for logging");
+    LOG_INFO("[SDStorage] BSP-based log file created successfully");
 #else
-    // PC/테스트 환경: 파일 생성 시뮬레이션 (항상 성공)
-    LOG_INFO("[SDStorage] Test environment - file creation simulated");
+    // PC/테스트 환경: 시뮬레이션
+    LOG_INFO("[SDStorage] Test environment - BSP file creation simulated");
 #endif
     
     g_current_log_size = 0;
@@ -275,77 +287,131 @@ size_t SDStorage_GetCurrentLogSize(void)
 static int _create_log_directory(void)
 {
 #ifdef STM32F746xx
-    // STM32: SD카드 저수준 테스트 먼저 수행
-    LOG_INFO("[SDStorage] Testing SD card at HAL level before f_mkdir...");
+    // STM32: BSP 기반 SD 카드 테스트
+    LOG_INFO("[SDStorage] Testing SD card functionality with BSP drivers...");
     
-    extern SD_HandleTypeDef hsd1;
+    // 1. BSP SD 카드 읽기 테스트
+    static uint32_t read_buffer[128];  // 512 bytes = 128 uint32_t
+    uint8_t read_result = BSP_SD_ReadBlocks(read_buffer, 0, 1, 5000);
+    LOG_INFO("[SDStorage] BSP_SD_ReadBlocks result: %d (0=OK)", read_result);
     
-    // 1. SD카드 읽기 테스트 (섹터 0 읽기)
-    static uint8_t read_buffer[512];
-    HAL_StatusTypeDef read_result = HAL_SD_ReadBlocks(&hsd1, read_buffer, 0, 1, 5000);
-    LOG_INFO("[SDStorage] HAL_SD_ReadBlocks result: %d", read_result);
-    
-    if (read_result != HAL_OK) {
-        LOG_ERROR("[SDStorage] SD card read test failed - hardware problem");
+    if (read_result != MSD_OK) {
+        LOG_ERROR("[SDStorage] BSP SD read test failed - hardware problem");
         return SDSTORAGE_ERROR;
     }
     
-    // 2. SD카드 쓰기 테스트 (임시 섹터에 쓰기)
-    static uint8_t write_buffer[512];
+    // 2. BSP SD 카드 쓰기 테스트 (안전한 섹터 사용)
+    static uint32_t write_buffer[128];
     memset(write_buffer, 0xAA, 512);  // 테스트 패턴
     
-    LOG_INFO("[SDStorage] Testing SD card write capability...");
-    HAL_StatusTypeDef write_result = HAL_SD_WriteBlocks(&hsd1, write_buffer, 1000, 1, 5000);
-    LOG_INFO("[SDStorage] HAL_SD_WriteBlocks result: %d", write_result);
+    LOG_INFO("[SDStorage] Testing BSP SD write capability...");
+    uint8_t write_result = BSP_SD_WriteBlocks(write_buffer, 1000, 1, 5000);
+    LOG_INFO("[SDStorage] BSP_SD_WriteBlocks result: %d (0=OK)", write_result);
     
-    if (write_result != HAL_OK) {
-        LOG_ERROR("[SDStorage] SD card write test failed - card may be write-protected or damaged");
+    if (write_result != MSD_OK) {
+        LOG_ERROR("[SDStorage] BSP SD write test failed - card may be write-protected");
         return SDSTORAGE_ERROR;
     }
     
-    // 3. 쓰기 검증 (방금 쓴 데이터 읽기)
-    static uint8_t verify_buffer[512];
-    HAL_StatusTypeDef verify_result = HAL_SD_ReadBlocks(&hsd1, verify_buffer, 1000, 1, 5000);
-    LOG_INFO("[SDStorage] HAL_SD_ReadBlocks(verify) result: %d", verify_result);
+    // 3. 쓰기 완료 대기 및 상태 확인
+    LOG_INFO("[SDStorage] Waiting for write completion...");
+    HAL_Delay(100);  // 쓰기 안정화 대기
     
-    if (verify_result == HAL_OK) {
-        if (memcmp(write_buffer, verify_buffer, 512) == 0) {
-            LOG_INFO("[SDStorage] ✅ SD card read/write test successful - hardware is OK");
+    uint8_t card_state = BSP_SD_GetCardState();
+    LOG_INFO("[SDStorage] Card state after write: %d (0=TRANSFER_OK)", card_state);
+    
+    // 4. 쓰기 검증
+    static uint32_t verify_buffer[128];
+    uint8_t verify_result = BSP_SD_ReadBlocks(verify_buffer, 1000, 1, 5000);
+    LOG_INFO("[SDStorage] BSP_SD_ReadBlocks(verify) result: %d", verify_result);
+    
+    bool verification_ok = false;
+    if (verify_result == MSD_OK) {
+        int mismatch_count = 0;
+        for (int i = 0; i < 128; i++) {
+            if (write_buffer[i] != verify_buffer[i]) {
+                mismatch_count++;
+            }
+        }
+        
+        if (mismatch_count == 0) {
+            LOG_INFO("[SDStorage] ✅ BSP SD read/write test successful");
+            verification_ok = true;
         } else {
-            LOG_WARN("[SDStorage] ⚠️ SD card data verification failed - possible data corruption");
+            LOG_WARN("[SDStorage] ⚠️ BSP SD data verification failed - %d mismatches", mismatch_count);
+            verification_ok = false;
+        }
+    } else {
+        LOG_ERROR("[SDStorage] BSP SD verify read failed");
+        verification_ok = false;
+    }
+    
+    // 5. 하드웨어 테스트 결과 평가
+    if (write_result != MSD_OK || verify_result != MSD_OK || !verification_ok) {
+        LOG_WARN("[SDStorage] BSP hardware test failed - attempting simple file test");
+    } else {
+        LOG_INFO("[SDStorage] BSP hardware test passed - proceeding with directory creation");
+    }
+    
+    // 6. FatFs 레벨 테스트 - 로그 디렉토리 생성
+    LOG_INFO("[SDStorage] Creating log directory: %s", SDSTORAGE_LOG_DIR);
+    FRESULT mkdir_result = f_mkdir(SDSTORAGE_LOG_DIR);
+    LOG_INFO("[SDStorage] f_mkdir result: %d (0=OK, 8=FR_EXIST)", mkdir_result);
+    
+    if (mkdir_result != FR_OK && mkdir_result != FR_EXIST) {
+        LOG_WARN("[SDStorage] Directory creation failed: %d, testing root directory access", mkdir_result);
+        
+        // 루트 디렉토리에서 테스트 파일 생성
+        FIL test_file;
+        FRESULT test_result = f_open(&test_file, "bsp_test.txt", FA_CREATE_NEW | FA_WRITE);
+        
+        if (test_result == FR_OK) {
+            const char* test_data = "BSP Test\n";
+            UINT bytes_written;
+            f_write(&test_file, test_data, strlen(test_data), &bytes_written);
+            f_close(&test_file);
+            f_unlink("bsp_test.txt");  // 정리
+            
+            LOG_INFO("[SDStorage] ✅ Root directory file test successful");
+            return SDSTORAGE_OK;  // 루트에서 파일 생성 가능
+        } else {
+            LOG_ERROR("[SDStorage] Root directory file test failed: %d", test_result);
+            return SDSTORAGE_ERROR;
         }
     }
     
-    // 4. HAL 테스트에서 검증 실패가 있어도 f_mkdir 시도 (블로킹 방지를 위해 스킵)
-    if (verify_result != HAL_OK) {
-        LOG_WARN("[SDStorage] Verify read failed - skipping f_mkdir to avoid blocking");
-        LOG_INFO("[SDStorage] Will try direct file creation instead of directory");
-        return SDSTORAGE_OK;  // 디렉토리 없이도 파일 생성 시도
-    }
+    // 7. 디렉토리 생성 성공 - 추가 테스트
+    FIL test_file;
+    char test_path[64];
+    snprintf(test_path, sizeof(test_path), "%s/bsp_test.txt", SDSTORAGE_LOG_DIR);
     
-    LOG_INFO("[SDStorage] HAL tests fully passed - attempting f_mkdir for '%s'...", SDSTORAGE_LOG_DIR);
-    FRESULT mkdir_result = f_mkdir(SDSTORAGE_LOG_DIR);
-    LOG_INFO("[SDStorage] f_mkdir result: %d", mkdir_result);
-    
-    // FR_EXIST(9)는 이미 존재함을 의미하므로 성공으로 처리
-    if (mkdir_result == FR_OK || mkdir_result == FR_EXIST) {
-        LOG_INFO("[SDStorage] Directory ready (created or already exists)");
+    FRESULT file_test = f_open(&test_file, test_path, FA_CREATE_NEW | FA_WRITE);
+    if (file_test == FR_OK) {
+        const char* test_data = "BSP Directory Test\n";
+        UINT bytes_written;
+        f_write(&test_file, test_data, strlen(test_data), &bytes_written);
+        f_close(&test_file);
+        f_unlink(test_path);  // 정리
+        
+        LOG_INFO("[SDStorage] ✅ Directory and file creation fully functional");
         return SDSTORAGE_OK;
     } else {
-        LOG_ERROR("[SDStorage] f_mkdir failed: %d - FatFs level problem", mkdir_result);
-        LOG_INFO("[SDStorage] Will try direct file creation without directory");
-        return SDSTORAGE_OK;  // 디렉토리 실패해도 루트에 파일 생성 시도
+        LOG_ERROR("[SDStorage] Directory file test failed: %d", file_test);
+        return SDSTORAGE_ERROR;
     }
+    
 #else
-    // PC: mkdir 시뮬레이션 (테스트에서는 성공으로 가정)
-    LOG_INFO("[SDStorage] Test environment - directory creation simulated");
+    // PC: 시뮬레이션
+    LOG_INFO("[SDStorage] Test environment - BSP directory creation simulated");
     return SDSTORAGE_OK;
 #endif
 }
 
 static int _generate_log_filename(char* filename, size_t max_len)
 {
+    // 타임스탬프는 향후 확장용으로 유지
     uint32_t timestamp = _get_current_timestamp();
+    (void)timestamp;  // 경고 방지용
     
     // YYYYMMDD_HHMMSS 형식으로 타임스탬프 생성
     uint16_t year = 2025;   // 기본값
@@ -376,9 +442,10 @@ static int _generate_log_filename(char* filename, size_t max_len)
     second = timestamp % 60;  // 타임스탬프 기반 변화
 #endif
     
-    // 디렉토리가 없을 경우를 대비해 루트에 파일 생성
+    // 디렉토리 포함하여 파일 생성 (클럭 최적화 후 정상 동작 기대)
     int result = snprintf(filename, max_len, 
-                         "%s%04d%02d%02d_%02d%02d%02d%s",
+                         "%s/%s%04d%02d%02d_%02d%02d%02d%s",
+                         SDSTORAGE_LOG_DIR,
                          SDSTORAGE_LOG_PREFIX,
                          year, month, day, hour, minute, second,
                          SDSTORAGE_LOG_EXTENSION);
