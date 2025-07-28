@@ -56,17 +56,6 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 extern RTC_HandleTypeDef hrtc;
-
-// UART DMA 핸들들 (stm32f7xx_it.c에서 사용)
-extern UART_HandleTypeDef huart6;
-extern DMA_HandleTypeDef hdma_usart6_rx;
-
-// 함수 선언들
-void MX_USART6_DMA_Init(void);
-void StartReceiveTask(void const * argument);
-
-// RTOS 태스크 핸들들은 main.c에서만 사용하므로 여기서 제거
-// (FatFs 등 다른 모듈에서 FreeRTOS 타입을 알 필요 없음)
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

@@ -1,0 +1,1 @@
+ccm --plan pro --view realtime --timezone Asia/Seoul --time-format 12h --theme dark
