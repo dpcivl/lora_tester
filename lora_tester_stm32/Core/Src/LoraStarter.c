@@ -129,7 +129,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 ctx->error_count = 0; // JOIN 성공 시 에러 카운터 리셋
                 ctx->retry_delay_ms = 1000; // 재시도 지연 시간 리셋
                 ctx->last_retry_time = 0; // 재시도 시간 리셋
-                LOG_INFO("[LoRa] Starting periodic send with message: %s", ctx->send_message);
+                LOG_WARN("[LoRa] 🚀 PERIODIC SEND STARTED with message: %s", ctx->send_message);
             }
             break;
         case LORA_STATE_SEND_PERIODIC:

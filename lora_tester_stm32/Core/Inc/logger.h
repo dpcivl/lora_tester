@@ -1,8 +1,16 @@
+/*
+ * logger.h
+ *
+ *  Created on: Jun 24, 2025
+ *      Author: Lab2
+ */
+
 #ifndef LOGGER_H
 #define LOGGER_H
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 // 로깅 레벨 정의
 typedef enum {
@@ -41,8 +49,21 @@ LoggerStatus LOGGER_Platform_Disconnect(void);
 LoggerStatus LOGGER_Platform_Send(const char* message);
 LoggerStatus LOGGER_Platform_Configure(const LoggerConfig* config);
 
-// 전방 선언
+// Logger 모드 추가
+typedef enum {
+    LOGGER_MODE_TERMINAL_ONLY,
+    LOGGER_MODE_SD_ONLY,
+    LOGGER_MODE_DUAL
+} LoggerMode_t;
+
+// Logger 제어 함수 추가
+void LOGGER_SetFilterLevel(LogLevel min_level);
+void LOGGER_SetMode(LoggerMode_t mode);
+LoggerMode_t LOGGER_GetMode(void);
 void LOGGER_SendFormatted(LogLevel level, const char* format, ...);
+
+// 비동기 SD 로깅 함수 (메인 태스크 블로킹 방지)
+int LOGGER_SendToSDAsync(const char* message, size_t length);
 
 // 편의 매크로들
 #define LOG_DEBUG(fmt, ...) \
@@ -59,25 +80,25 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...);
 
 // LoRa 전용 로깅 매크로들
 #define LORA_LOG_JOIN_ATTEMPT() \
-    LOG_INFO("[LoRa] JOIN attempt started")
+    LOG_WARN("[LoRa] 🌐 JOIN ATTEMPT started")
 
 #define LORA_LOG_JOIN_SUCCESS() \
-    LOG_INFO("[LoRa] JOIN successful")
+    LOG_WARN("[LoRa] ✅ JOIN SUCCESSFUL")
 
 #define LORA_LOG_JOIN_FAILED(reason) \
     LOG_WARN("[LoRa] JOIN failed: %s", reason)
 
 #define LORA_LOG_SEND_ATTEMPT(message) \
-    LOG_INFO("[LoRa] SEND attempt: %s", message)
+    LOG_WARN("[LoRa] 📤 SEND ATTEMPT: %s", message)
 
 #define LORA_LOG_SEND_SUCCESS() \
-    LOG_INFO("[LoRa] SEND successful")
+    LOG_WARN("[LoRa] ✅ SEND SUCCESSFUL")
 
 #define LORA_LOG_SEND_FAILED(reason) \
     LOG_WARN("[LoRa] SEND failed: %s", reason)
 
 #define LORA_LOG_RETRY_ATTEMPT(attempt_num, max_retries) \
-    LOG_WARN("[LoRa] Retry attempt %d/%d", attempt_num, max_retries)
+    LOG_WARN("[LoRa] Retry attempt %d/%s", attempt_num, (max_retries == 0) ? "∞" : max_retries)
 
 #define LORA_LOG_STATE_CHANGE(from_state, to_state) \
     LOG_DEBUG("[LoRa] State change: %s -> %s", from_state, to_state)
@@ -88,4 +109,4 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...);
 #define LORA_LOG_MAX_RETRIES_REACHED() \
     LOG_ERROR("[LoRa] Maximum retry count reached")
 
-#endif // LOGGER_H 
+#endif // LOGGER_H

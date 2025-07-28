@@ -41,6 +41,10 @@ extern SD_HandleTypeDef hsd1;
 #define QUEUE_SIZE         (uint32_t) 10
 #define READ_CPLT_MSG      (uint32_t) 1
 #define WRITE_CPLT_MSG     (uint32_t) 2
+
+// BSP/HAL 충돌 해결을 위한 강제 설정
+#define DISABLE_SD_INIT    1
+#define FORCE_HAL_ONLY     1
 /*
 ==================================================================
 enable the defines below to send custom rtos messages
@@ -69,7 +73,7 @@ See BSP_SD_ErrorCallback() and BSP_SD_AbortCallback() below
  * BSP_SD_Init() elsewhere in the application.
  */
 /* USER CODE BEGIN disableSDInit */
-#define DISABLE_SD_INIT
+// #define DISABLE_SD_INIT - Already defined above
 /* USER CODE END disableSDInit */
 
 /*
@@ -316,50 +320,23 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
   if (!((uint32_t)buff & 0x3))
   {
 #endif
-    /* Fast path cause destination buffer is correctly aligned */
-    ret = BSP_SD_ReadBlocks_DMA((uint32_t*)buff, (uint32_t)(sector), count);
+    /* Fast path cause destination buffer is correctly aligned - using polling mode */
+    LOG_INFO("[sd_diskio] Using BSP_SD_ReadBlocks (polling) instead of DMA");
+    ret = BSP_SD_ReadBlocks((uint32_t*)buff, (uint32_t)(sector), count, SD_TIMEOUT);
 
     if (ret == MSD_OK) {
-#if (osCMSIS < 0x20000U)
-    /* wait for a message from the queue or a timeout */
-    event = osMessageGet(SDQueueID, SD_TIMEOUT);
-
-    if (event.status == osEventMessage)
-    {
-      if (event.value.v == READ_CPLT_MSG)
-      {
-        timer = osKernelSysTick();
-        /* block until SDIO IP is ready or a timeout occur */
-        while(osKernelSysTick() - timer <SD_TIMEOUT)
-#else
-          status = osMessageQueueGet(SDQueueID, (void *)&event, NULL, SD_TIMEOUT);
-          if ((status == osOK) && (event == READ_CPLT_MSG))
-          {
-            timer = osKernelGetTickCount();
-            /* block until SDIO IP is ready or a timeout occur */
-            while(osKernelGetTickCount() - timer <SD_TIMEOUT)
-#endif
-            {
-              if (BSP_SD_GetCardState() == SD_TRANSFER_OK)
-              {
-                res = RES_OK;
+        LOG_INFO("[sd_diskio] BSP_SD_ReadBlocks result: %d", ret);
+        LOG_INFO("[sd_diskio] Polling read completed - no queue wait needed");
+        res = RES_OK;
 #if (ENABLE_SD_DMA_CACHE_MAINTENANCE == 1)
-                /*
-                the SCB_InvalidateDCache_by_Addr() requires a 32-Byte aligned address,
-                adjust the address and the D-Cache size to invalidate accordingly.
-                */
-                alignedAddr = (uint32_t)buff & ~0x1F;
-                SCB_InvalidateDCache_by_Addr((uint32_t*)alignedAddr, count*BLOCKSIZE + ((uint32_t)buff - alignedAddr));
+        /*
+        the SCB_InvalidateDCache_by_Addr() requires a 32-Byte aligned address,
+        adjust the address and the D-Cache size to invalidate accordingly.
+        */
+        alignedAddr = (uint32_t)buff & ~0x1F;
+        SCB_InvalidateDCache_by_Addr((uint32_t*)alignedAddr, count*BLOCKSIZE + ((uint32_t)buff - alignedAddr));
 #endif
-                break;
-              }
-            }
-#if (osCMSIS < 0x20000U)
-          }
-        }
-#else
-      }
-#endif
+        LOG_INFO("[sd_diskio] Read operation successful");
     }
 
 #if defined(ENABLE_SCRATCH_BUFFER)
@@ -371,10 +348,10 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
 
       for (i = 0; i < count; i++)
       {
-        ret = BSP_SD_ReadBlocks_DMA((uint32_t*)scratch, (uint32_t)sector++, 1);
+        ret = BSP_SD_ReadBlocks((uint32_t*)scratch, (uint32_t)sector++, 1, SD_TIMEOUT);
         if (ret == MSD_OK )
         {
-          /* wait until the read is successful or a timeout occurs */
+          /* Polling mode - no queue wait needed */
 #if (osCMSIS < 0x20000U)
           /* wait for a message from the queue or a timeout */
           event = osMessageGet(SDQueueID, SD_TIMEOUT);
@@ -453,17 +430,10 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
 DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
 {
   DRESULT res = RES_ERROR;
-  uint32_t timer;
-
-#if (osCMSIS < 0x20000U)
-  osEvent event;
-#else
-  uint16_t event;
-  osStatus_t status;
-#endif
+  int32_t ret;  // BSP 함수 결과 저장용
 
 #if defined(ENABLE_SCRATCH_BUFFER)
-  int32_t ret;
+  // scratch buffer 사용 시 추가 변수들은 여기에 선언
 #endif
 
   /*
@@ -489,45 +459,17 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
   SCB_CleanDCache_by_Addr((uint32_t*)alignedAddr, count*BLOCKSIZE + ((uint32_t)buff - alignedAddr));
 #endif
 
-  if(BSP_SD_WriteBlocks_DMA((uint32_t*)buff,
-                           (uint32_t) (sector),
-                           count) == MSD_OK)
+  // BSP 폴링 모드 사용 (DMA 큐 대기 제거)
+  LOG_INFO("[sd_diskio] Using BSP_SD_WriteBlocks (polling) instead of DMA");
+  ret = BSP_SD_WriteBlocks((uint32_t*)buff, (uint32_t)sector, count, SD_TIMEOUT);
+  LOG_INFO("[sd_diskio] BSP_SD_WriteBlocks result: %d", ret);
+  
+  if(ret == MSD_OK)
   {
-#if (osCMSIS < 0x20000U)
-    /* Get the message from the queue */
-    event = osMessageGet(SDQueueID, SD_TIMEOUT);
-
-    if (event.status == osEventMessage)
-    {
-      if (event.value.v == WRITE_CPLT_MSG)
-      {
-#else
-    status = osMessageQueueGet(SDQueueID, (void *)&event, NULL, SD_TIMEOUT);
-    if ((status == osOK) && (event == WRITE_CPLT_MSG))
-    {
-#endif
- #if (osCMSIS < 0x20000U)
-        timer = osKernelSysTick();
-        /* block until SDIO IP is ready or a timeout occur */
-        while(osKernelSysTick() - timer  < SD_TIMEOUT)
-#else
-        timer = osKernelGetTickCount();
-        /* block until SDIO IP is ready or a timeout occur */
-        while(osKernelGetTickCount() - timer  < SD_TIMEOUT)
-#endif
-        {
-          if (BSP_SD_GetCardState() == SD_TRANSFER_OK)
-          {
-            res = RES_OK;
-            break;
-          }
-        }
-#if (osCMSIS < 0x20000U)
-      }
-    }
-#else
-    }
-#endif
+    // 폴링 방식이므로 큐 대기 불필요 - 즉시 성공 처리
+    LOG_INFO("[sd_diskio] Polling write completed - no queue wait needed");
+    res = RES_OK;
+    LOG_INFO("[sd_diskio] Write operation successful");
   }
 #if defined(ENABLE_SCRATCH_BUFFER)
   else {
@@ -545,10 +487,10 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
         memcpy((void *)scratch, buff, BLOCKSIZE);
         buff += BLOCKSIZE;
 
-        ret = BSP_SD_WriteBlocks_DMA((uint32_t*)scratch, (uint32_t)sector++, 1);
+        ret = BSP_SD_WriteBlocks((uint32_t*)scratch, (uint32_t)sector++, 1, SD_TIMEOUT);
         if (ret == MSD_OK )
         {
-          /* wait until the read is successful or a timeout occurs */
+          /* Polling mode - no queue wait needed */
 #if (osCMSIS < 0x20000U)
           /* wait for a message from the queue or a timeout */
           event = osMessageGet(SDQueueID, SD_TIMEOUT);

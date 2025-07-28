@@ -62,7 +62,7 @@ bool is_join_response_ok(const char* response)
     bool result = (strcmp(clean_response, "+EVT:JOINED") == 0);
     
     if (result) {
-        LOG_INFO("[ResponseHandler] JOIN response confirmed: %s", response);
+        LOG_WARN("[ResponseHandler] ✅ JOIN SUCCESS: %s", response);
     } else {
         LOG_DEBUG("[ResponseHandler] Not a JOIN response: '%s'", response);
     }
@@ -80,7 +80,7 @@ ResponseType ResponseHandler_ParseSendResponse(const char* response)
     LOG_DEBUG("[ResponseHandler] Parsing SEND response: '%s'", response);
     
     if (strstr(response, "+EVT:SEND_CONFIRMED_OK") != NULL) {
-        LOG_INFO("[ResponseHandler] SEND response: CONFIRMED_OK");
+        LOG_WARN("[ResponseHandler] ✅ SEND SUCCESS: CONFIRMED_OK");
         return RESPONSE_OK;
     }
     if (strstr(response, "+EVT:SEND_CONFIRMED_FAILED") != NULL) {

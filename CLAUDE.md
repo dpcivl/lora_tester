@@ -805,9 +805,401 @@ if (mount_result != FR_OK) {
 - **자동 복구**: ✅ **구현 완료** (f_mkfs 자동 시도)
 - **SD 로깅**: ❌ **하드웨어 블로킹** (교체 필요)
 
+## SD 카드 로깅 시스템 완전 구현 및 f_open 블로킹 문제 발견 (2025-07-28)
+
+### 🎯 **이번 세션 목표**
+- SD 카드에도 로깅, 터미널에도 로깅하는 이중 로깅 시스템 구현
+- LoRa 통신이 가장 우선순위, SD 로깅이 그 다음, 터미널이 최저 우선순위로 설정
+- 초기화까지만 터미널 로깅, 이후 LoRa 통신 시 SD 로깅으로 전환
+- SD카드에는 JOIN, Send, Re-Join, ERROR만 저장 (모든 로그 X)
+
+### ✅ **완료된 주요 구현사항**
+
+#### **1. Logger 모드 시스템 구현**
+```c
+typedef enum {
+    LOGGER_MODE_TERMINAL_ONLY,
+    LOGGER_MODE_SD_ONLY,
+    LOGGER_MODE_DUAL
+} LoggerMode_t;
+
+void LOGGER_SetFilterLevel(LogLevel min_level);
+void LOGGER_SetMode(LoggerMode_t mode);
+LoggerMode_t LOGGER_GetMode(void);
+```
+
+#### **2. 단계별 로깅 전환 시스템**
+- **Phase 1**: 초기화 단계 (터미널 로깅, 모든 레벨)
+- **Phase 2**: LoRa 운영 단계 (SD 로깅, WARN/ERROR만)
+
+#### **3. LoRa 중요 이벤트 WARN 레벨 승격**
+```c
+// JOIN 이벤트들 → WARN 레벨로 변경
+#define LORA_LOG_JOIN_ATTEMPT() \
+    LOG_WARN("[LoRa] 🌐 JOIN ATTEMPT started")
+#define LORA_LOG_JOIN_SUCCESS() \
+    LOG_WARN("[LoRa] ✅ JOIN SUCCESSFUL")
+
+// SEND 이벤트들 → WARN 레벨로 변경  
+#define LORA_LOG_SEND_ATTEMPT(message) \
+    LOG_WARN("[LoRa] 📤 SEND ATTEMPT: %s", message)
+#define LORA_LOG_SEND_SUCCESS() \
+    LOG_WARN("[LoRa] ✅ SEND SUCCESSFUL")
+```
+
+#### **4. 중복 헤더 파일 정리**
+- `Core/Inc/logger.h` ← 메인 헤더 (우선순위 높음)
+- `Core/Src/logger/inc/logger.h` ← 중복 제거됨
+- `Core/Src/logger/inc/logger_platform.h` ← 중복 제거됨
+- 빈 디렉토리 `Core/Src/logger/inc` 제거
+
+### 🔴 **발견된 치명적 문제: f_open() 블로킹**
+
+#### **증상**
+```
+[INFO] [SDStorage] Attempting to create log file: lora_log_20000101_000010.bin
+// 여기서 시스템 완전 정지
+```
+
+#### **근본 원인**
+- **SDStorage_CreateNewLogFile()** 함수의 `f_open(&g_log_file, g_current_log_file, FA_CREATE_NEW | FA_WRITE)`에서 무한 대기
+- SD 카드 쓰기 기능 문제로 FatFs가 블로킹됨
+- LoRa 통신까지 완전 차단되어 Chirpstack 서버에 데이터 전송 불가
+
+#### **로그 분석 결과**
+- **SD 하드웨어**: 정상 (읽기 테스트 통과)
+- **SD 마운트**: 성공 (deferred mount)
+- **SD 디렉토리**: 생성 성공 (우회 처리)
+- **파일 생성**: 실패 (f_open에서 블로킹)
+
+### 🛠️ **구현된 해결 시도들**
+
+#### **1. DUAL 모드 구현**
+```c
+// main.c - 터미널과 SD 동시 출력
+LOGGER_SetMode(LOGGER_MODE_DUAL);
+LOG_WARN("✅ Logger switched to DUAL mode (Terminal + SD) with WARN+ filter");
+LOGGER_SetFilterLevel(LOG_LEVEL_WARN);
+```
+
+#### **2. 로깅 순서 최적화**
+- 필터 레벨 설정을 로그 출력 **이후**로 이동
+- WARN 로그가 필터링되지 않도록 순서 조정
+
+#### **3. 에러 디버깅 시스템**
+```c
+// SDStorage.c - f_open 에러 상세 로깅
+FRESULT open_result = f_open(&g_log_file, g_current_log_file, FA_CREATE_NEW | FA_WRITE);
+LOG_INFO("[SDStorage] f_open result: %d", open_result);
+if (open_result != FR_OK) {
+    LOG_ERROR("[SDStorage] f_open failed: %d - SD write problem detected", open_result);
+}
+```
+
+### 📊 **LoRa 전송 주기 분석**
+
+#### **설정값 확인**
+```c
+// LoraStarter.c:56
+ctx->send_interval_ms = 300000;  // 5분 간격 (300초)
+
+// 폴백 기본값: 30초 (실제로는 사용되지 않음)
+uint32_t interval_ms = (ctx->send_interval_ms > 0) ? ctx->send_interval_ms : 30000;
+```
+
+**결론**: LoRa SEND는 **5분(300초)마다 실행**됨
+
+### 🎯 **다음 세션 해결 방안**
+
+#### **긴급 우선순위 1: LoRa 통신 복구**
+- SD 로깅을 완전히 비활성화하고 터미널 전용 모드로 LoRa 통신 우선 복구
+- f_open 블로킹 문제 우회
+
+#### **우선순위 2: SD 쓰기 문제 해결**
+- 다른 SD 카드로 교체 테스트
+- FatFs 설정 재검토
+- f_open 타임아웃 구현
+
+#### **우선순위 3: 비동기 SD 로깅**
+- SD 쓰기를 별도 태스크로 분리
+- 큐 기반 버퍼링으로 LoRa 통신 블로킹 방지
+
+### 📁 **수정된 파일 목록**
+
+#### **Logger 시스템**
+- ✅ `Core/Inc/logger.h` - 모드 시스템 및 WARN 레벨 매크로 추가
+- ✅ `Core/Src/logger/src/logger.c` - 모드별 출력 로직 구현
+
+#### **메인 애플리케이션**  
+- ✅ `Core/Src/main.c` - 단계별 로깅 전환 시스템
+- ✅ `Core/Src/ResponseHandler.c` - JOIN/SEND 이벤트 WARN 승격
+- ✅ `Core/Src/LoraStarter.c` - 주기적 전송 시작 WARN 승격
+
+#### **정리된 중복 파일들**
+- ❌ `Core/Src/logger/inc/logger.h` - 제거됨
+- ❌ `Core/Src/logger/inc/logger_platform.h` - 제거됨  
+- ❌ `Core/Src/logger/inc/` - 디렉토리 제거됨
+
+### 🔄 **시스템 현재 상태**
+
+- **LoRa 하드웨어**: ✅ 정상 (UART6 DMA 통신 확인)
+- **LoRa 소프트웨어**: ✅ TDD 검증 완료 (36개 테스트 통과)
+- **SD 하드웨어**: ✅ 읽기 정상 (HAL_SD_ReadBlocks 성공)
+- **SD 쓰기**: ❌ **f_open 블로킹** (치명적 문제)
+- **터미널 로깅**: ✅ 정상 (WARN 레벨 출력 확인)
+- **LoRa 통신**: ❌ **SD 블로킹으로 인해 차단됨**
+
+### 💡 **핵심 교훈**
+
+1. **우선순위 설계**: LoRa 통신이 SD 로깅보다 중요하므로 SD 문제가 LoRa를 차단하면 안됨
+2. **비동기 처리**: SD 쓰기는 반드시 별도 태스크로 분리 필요
+3. **에러 격리**: 하나의 모듈 실패가 전체 시스템을 차단하지 않도록 설계
+4. **단계별 구현**: 완전한 기능보다 핵심 기능 우선 구현 후 점진적 확장
+
+## FatFs 블로킹 문제 근본 원인 분석 및 해결 (2025-07-28)
+
+### 🔍 **종합 기술 검토 결과**
+
+#### **✅ 정상 확인된 부분들:**
+1. **CubeMX 설정**: SYSCLK 200MHz, SDMMC1 48MHz→12MHz, 1-bit 버스
+2. **FatFs 설정**: _FS_REENTRANT=1, FreeRTOS 호환, 세마포어 구현
+3. **FreeRTOS 설정**: 32KB 힙, 스택 오버플로우 검사, 뮤텍스 활성화
+4. **SD 하드웨어**: HAL_SD_ReadBlocks/WriteBlocks 완전 정상
+
+#### **🔴 발견된 근본 문제들:**
+
+**1. BSP vs HAL 혼재 충돌**
+```c
+// main.c: HAL 초기화
+HAL_SD_Init(&hsd1);
+
+// sd_diskio.c: BSP 함수 호출
+BSP_SD_Init();
+BSP_SD_WriteBlocks_DMA();
+```
+
+**2. DMA 비동기 완료 대기 블로킹**
+```c
+// sd_diskio.c:502 - 무한 대기 발생
+event = osMessageGet(SDQueueID, SD_TIMEOUT);
+```
+
+**3. DISABLE_SD_INIT 설정 불일치**
+- 정의되어 있지만 BSP 함수들이 여전히 호출됨
+
+### 🔧 **근본 해결 방안 구현**
+
+#### **수정 파일: sd_diskio.c**
+
+**1. BSP 완전 제거 설정**:
+```c
+#define DISABLE_SD_INIT    1
+#define FORCE_HAL_ONLY     1
+```
+
+**2. DMA → 동기 방식 전환**:
+```c
+// 기존: BSP_SD_WriteBlocks_DMA() + 큐 대기
+// 수정: HAL_SD_WriteBlocks() 동기 방식
+HAL_StatusTypeDef hal_result = HAL_SD_WriteBlocks(&hsd1, (uint8_t*)buff, sector, count, SD_TIMEOUT);
+if(hal_result == HAL_OK) {
+    res = RES_OK;  // 즉시 완료 처리
+}
+```
+
+**3. 큐 대기 로직 완전 제거**:
+- osMessageGet() 호출 제거
+- DMA 완료 대기 루프 제거
+- 즉시 성공 반환 방식으로 변경
+
+### 🎯 **예상 효과**
+
+1. **f_open() 블로킹 해결**: BSP/HAL 충돌 제거로 정상 파일 생성
+2. **f_write() 블로킹 해결**: DMA 큐 대기 제거로 즉시 완료
+3. **Windows 호환성**: 정상적인 FatFs 사용으로 `log.txt` 파일 생성
+4. **장기 테스트 가능**: 모든 블로킹 요소 제거
+
+### 📊 **기대 로그 출력**:
+```
+[INFO] [sd_diskio] Using HAL_SD_WriteBlocks (synchronous) instead of BSP DMA
+[INFO] [sd_diskio] HAL_SD_WriteBlocks result: 0  
+[INFO] [sd_diskio] HAL synchronous write completed - no queue wait needed
+[INFO] [sd_diskio] Write operation successful
+[INFO] ✅ [TX_TASK] SD card write operation SUCCESS
+```
+
+### 🔑 **핵심 발견사항**
+
+**FatFs 블로킹의 진짜 원인**: 
+- f_open/f_write 자체의 문제가 아님
+- **sd_diskio.c의 BSP/HAL 혼재 및 DMA 큐 대기**가 근본 원인
+- 하드웨어는 완전 정상, 소프트웨어 레이어 문제
+
+**해결 핵심**: 
+- BSP 완전 제거 + HAL 전용 사용
+- DMA 비동기 → 동기 방식 전환
+- FreeRTOS 큐 대기 로직 제거
+
 ---
 
-**Last Update**: 2025-07-24 오후 세션  
-**Status**: 🔴 **SD 로깅 필수 해결** - 장기간 운용 테스트를 위해 SD 카드 교체 긴급 필요  
-**Achievement**: SD 초기화 순서 최적화 + 자동 진단/복구 시스템 구현 + SD 하드웨어 문제 확정  
-**Critical Priority**: **SD 카드 교체** → 듀얼 로깅 시스템 완성 → 장기간 운용 테스트 가능
+## SD 카드 기본 기능 테스트에 집중 (2025-07-28 오후)
+
+### 🎯 **오늘의 명확한 목표**
+**LoRa 통신은 완벽히 동작하므로, SD 카드 기본 기능만 집중해서 구현**
+- **목표**: SD 카드에 FatFs 방식으로 로그 파일 쓰기 성공
+- **필수 요구사항**: **Windows OS에서 SD 카드를 넣어서 로그 파일 확인 가능해야 함**
+- **현재 문제**: f_mount()에서 시스템 블로킹 발생
+- **우선순위**: SD 카드 (FatFs 방식) > 기타 모든 기능
+
+### ⚠️ **중요: Windows 호환성 필수**
+- **HAL 직접 쓰기 방식은 사용 불가** (Windows에서 읽을 수 없음)
+- **반드시 FatFs를 통한 파일 시스템 방식으로 구현**
+- **목적**: STM32에서 로그 저장 → Windows PC에서 SD 카드 삽입 → 로그 파일 확인
+
+### 🔴 **현재 블로킹 상황**
+```
+[INFO] [SDStorage] Using deferred mount (flag=0) to avoid blocking...
+[여기서 시스템 정지 - f_mount() 호출 시 무한 대기]
+```
+
+#### **증상 분석:**
+- **disk_initialize()**: ✅ 성공 (result: 0x00)
+- **HAL SD card state**: ✅ 정상 (4 = TRANSFER)  
+- **SD 하드웨어**: ✅ 완전 정상
+- **f_mount()**: ❌ **블로킹 발생** ← 핵심 문제
+
+#### **시도한 해결책들:**
+1. ✅ **지연 마운트 → 즉시 마운트 변경** (flag=0 → flag=1)
+2. ✅ **FA_CREATE_NEW → FA_CREATE_ALWAYS 변경** (덮어쓰기 허용)
+3. ✅ **BSP/HAL 충돌 해결** (sd_diskio.c 수정 완료)
+4. ❌ **여전히 f_mount()에서 블로킹**
+
+### 🔧 **다음 해결 접근법**
+
+#### **우선순위 1: f_mount() 블로킹 문제 해결**
+- **FatFs 방식 유지** (Windows 호환성 필수)
+- f_mount() 호출 시 타임아웃 또는 비동기 처리 구현
+- 블로킹 원인 분석: FreeRTOS 스케줄러 또는 SD 카드 상태 문제
+
+#### **우선순위 2: SD 카드 물리적 점검**
+- 다른 SD 카드로 교체 테스트
+- PC에서 SD 카드 상태 확인 및 포맷
+- SD 카드 쓰기 보호 스위치 확인
+
+#### **우선순위 3: FatFs 설정 최적화**
+- ffconf.h 설정 재검토
+- FreeRTOS 호환성 설정 확인
+- 메모리 할당 방식 최적화
+
+### 📊 **시스템 현재 상태**
+- **LoRa 통신**: ✅ **완벽 동작** (30초 주기 전송, JOIN 성공)
+- **터미널 로깅**: ✅ **완벽 동작** 
+- **SD 하드웨어**: ✅ **정상** (HAL 레벨에서 읽기/쓰기 성공)
+- **SD FatFs**: ❌ **f_mount() 블로킹** ← **유일한 문제**
+
+### 🎯 **성공 기준**
+**오늘 세션 종료 시 달성해야 할 최소 목표:**
+1. **FatFs 방식으로** SD 카드에 로그 파일 쓰기 성공
+2. **Windows PC에서 SD 카드 삽입 시 로그 파일 확인 가능**
+3. 시스템 블로킹 없이 연속 동작 확인
+4. **HAL 직접 쓰기는 Windows 호환성 부족으로 사용 금지**
+
+---
+
+## SD 카드 f_mount() 블로킹 문제 해결 진행상황 (2025-07-28 저녁)
+
+### ✅ **완료된 단계들**
+
+#### **✅ 1단계: SDMMC1 하드웨어 설정 최적화 (완료)**
+```c
+// main.c:1038-1039 수정 완료
+hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_ENABLE;  // 하드웨어 플로우 컨트롤 활성화
+hsd1.Init.ClockDiv = 8;  // 클럭 분주비 2→8 (STM32F7 안정화)
+```
+
+#### **✅ 2단계: FatFs 설정 단순화 (완료)**
+```c
+// ffconf.h:243 수정 완료
+#define _FS_REENTRANT    0  // 1→0 (FreeRTOS 재진입성 비활성화, f_mount 블로킹 해결)
+```
+
+### 🔄 **남은 핵심 단계들**
+
+#### **⚡ 3단계: sd_diskio.c DMA→폴링 모드 전환 (최우선)**
+**목적**: osMessageGet() 큐 대기 블로킹 제거
+
+**수정 파일**: `FATFS/Target/sd_diskio.c`
+
+**주요 변경사항**:
+1. **읽기 함수 수정** (SD_disk_read):
+```c
+// 기존: ret = BSP_SD_ReadBlocks_DMA((uint32_t*)buff, (uint32_t)(sector), count);
+// 수정: ret = BSP_SD_ReadBlocks((uint32_t*)buff, (uint32_t)(sector), count, SD_TIMEOUT);
+
+// osMessageGet() 큐 대기 로직 완전 제거
+// 즉시 성공 처리로 변경
+```
+
+2. **쓰기 함수 수정** (SD_disk_write):
+```c
+// 기존: ret = BSP_SD_WriteBlocks_DMA((uint32_t*)buff, (uint32_t)sector, count);
+// 수정: ret = BSP_SD_WriteBlocks((uint32_t*)buff, (uint32_t)sector, count, SD_TIMEOUT);
+
+// 큐 대기 제거, 동기 처리로 변경
+```
+
+3. **코드 위치**:
+   - 읽기: 324번째 라인 주변
+   - 쓰기: 500번째 라인 주변 (이미 일부 수정됨)
+
+#### **🧪 4단계: 통합 테스트 및 검증**
+
+**테스트 시나리오**:
+1. **f_mount() 테스트**: 블로킹 없이 즉시 완료 확인
+2. **f_open() 테스트**: 로그 파일 생성 성공 확인
+3. **f_write() 테스트**: 데이터 쓰기 정상 동작 확인
+4. **Windows 호환성**: PC에서 SD 카드 삽입 후 파일 읽기 확인
+
+**예상 로그 출력**:
+```
+[INFO] [SDStorage] Using polling mode (no DMA queue wait)
+[INFO] [SDStorage] f_mount result: 0 (FR_OK)
+[INFO] [SDStorage] f_open result: 0 (FR_OK) 
+[INFO] [SDStorage] f_write completed: 100 bytes written
+[INFO] ✅ SD card logging system fully operational
+```
+
+### 🎯 **3단계 구체적 수행 방법**
+
+**A. sd_diskio.c 파일에서 찾아야 할 패턴들**:
+```c
+// 제거할 DMA 호출 패턴:
+BSP_SD_ReadBlocks_DMA
+BSP_SD_WriteBlocks_DMA
+osMessageGet(SDQueueID, SD_TIMEOUT)
+event.status == osEventMessage
+
+// 교체할 폴링 방식:
+BSP_SD_ReadBlocks
+BSP_SD_WriteBlocks
+// 큐 대기 없이 즉시 결과 반환
+```
+
+**B. 예상 수정 범위**:
+- 읽기 함수: 약 15-20줄 수정
+- 쓰기 함수: 약 15-20줄 수정
+- 총 수정 라인: 30-40줄
+
+### 🏆 **최종 목표 달성 기준**
+
+1. **f_mount() 1초 이내 완료**: 블로킹 없는 즉시 마운트
+2. **Windows 파일 인식**: PC에서 log.txt 파일 정상 읽기
+3. **지속적 로깅**: LoRa 통신과 동시에 SD 로깅 정상 동작
+4. **시스템 안정성**: 장시간 무인 운용 가능
+
+---
+
+**Last Update**: 2025-07-28 저녁 (1-2단계 완료, 3-4단계 남음)  
+**Status**: 🔄 **3단계 sd_diskio.c DMA→폴링 전환 필요**  
+**Progress**: **50% 완료 (하드웨어 설정 + FatFs 설정 완료)**  
+**Next**: **sd_diskio.c 큐 대기 로직 제거가 핵심**

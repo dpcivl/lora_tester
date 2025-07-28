@@ -1,6 +1,9 @@
-../Core/Src/logger/src/logger.c:24:14:LOGGER_Connect	3
-../Core/Src/logger/src/logger.c:35:14:LOGGER_Disconnect	3
-../Core/Src/logger/src/logger.c:44:14:LOGGER_Send	5
-../Core/Src/logger/src/logger.c:59:14:LOGGER_SendWithLevel	3
-../Core/Src/logger/src/logger.c:67:6:LOGGER_IsConnected	1
-../Core/Src/logger/src/logger.c:71:6:LOGGER_SendFormatted	2
+../Core/Src/logger/src/logger.c:26:14:LOGGER_Connect	3
+../Core/Src/logger/src/logger.c:37:14:LOGGER_Disconnect	3
+../Core/Src/logger/src/logger.c:46:14:LOGGER_Send	9
+../Core/Src/logger/src/logger.c:75:14:LOGGER_SendWithLevel	3
+../Core/Src/logger/src/logger.c:83:6:LOGGER_IsConnected	1
+../Core/Src/logger/src/logger.c:88:6:LOGGER_SetFilterLevel	1
+../Core/Src/logger/src/logger.c:92:6:LOGGER_SetMode	4
+../Core/Src/logger/src/logger.c:104:14:LOGGER_GetMode	1
+../Core/Src/logger/src/logger.c:108:6:LOGGER_SendFormatted	9

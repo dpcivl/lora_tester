@@ -13,6 +13,8 @@
 #include <stdarg.h>
 
 static bool logger_connected = false;
+static LoggerMode_t current_mode = LOGGER_MODE_TERMINAL_ONLY;
+static LogLevel filter_level = LOG_LEVEL_DEBUG;  // 기본적으로 모든 레벨 허용
 static LoggerConfig current_config = {
     .level = LOG_LEVEL_INFO,
     .enable_timestamp = false,
@@ -42,18 +44,32 @@ LoggerStatus LOGGER_Disconnect(void) {
 }
 
 LoggerStatus LOGGER_Send(const char* message) {
-    if (!logger_connected || message == NULL) return LOGGER_STATUS_ERROR;
+    if (message == NULL) return LOGGER_STATUS_ERROR;
     
-    // Network 모듈을 통해 로그 전송 (SD카드 또는 소켓)
-    if (Network_IsConnected()) {
-        int result = Network_SendBinary(message, strlen(message) + 1); // null terminator 포함
-        if (result == NETWORK_OK) {
+    // 새로운 모드 시스템 사용
+    switch (current_mode) {
+        case LOGGER_MODE_TERMINAL_ONLY:
+            return LOGGER_Platform_Send(message);
+            
+        case LOGGER_MODE_SD_ONLY:
+            if (Network_IsConnected()) {
+                int result = Network_SendBinary(message, strlen(message) + 1);
+                return (result == NETWORK_OK) ? LOGGER_STATUS_OK : LOGGER_STATUS_ERROR;
+            }
+            return LOGGER_STATUS_ERROR;
+            
+        case LOGGER_MODE_DUAL:
+            // 터미널 우선 출력
+            LOGGER_Platform_Send(message);
+            // SD 출력 (실패해도 무시)
+            if (Network_IsConnected()) {
+                Network_SendBinary(message, strlen(message) + 1);
+            }
             return LOGGER_STATUS_OK;
-        }
+            
+        default:
+            return LOGGER_STATUS_ERROR;
     }
-    
-    // Network 모듈 사용 실패 시 기존 플랫폼 방식 사용
-    return LOGGER_Platform_Send(message);
 }
 
 LoggerStatus LOGGER_SendWithLevel(LogLevel level, const char* message) {
@@ -68,7 +84,30 @@ bool LOGGER_IsConnected(void) {
     return logger_connected;
 }
 
+// Logger 제어 함수들
+void LOGGER_SetFilterLevel(LogLevel min_level) {
+    filter_level = min_level;
+}
+
+void LOGGER_SetMode(LoggerMode_t mode) {
+    current_mode = mode;
+    
+    // 모드에 따른 연결 상태 설정
+    if (mode == LOGGER_MODE_TERMINAL_ONLY) {
+        logger_connected = true;  // 터미널은 항상 연결됨
+    } else if (mode == LOGGER_MODE_SD_ONLY || mode == LOGGER_MODE_DUAL) {
+        // SD 백엔드 사용 시 Network 연결 상태에 따라 결정
+        logger_connected = Network_IsConnected();
+    }
+}
+
+LoggerMode_t LOGGER_GetMode(void) {
+    return current_mode;
+}
+
 void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
+    // 필터 레벨 체크
+    if (level < filter_level) return;
     if (level < current_config.level) return;
     
     char buffer[512];
@@ -83,5 +122,25 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
     vsnprintf(buffer + offset, sizeof(buffer) - offset, format, args);
     va_end(args);
     
-    LOGGER_Send(buffer);
+    // 모드에 따른 출력 처리
+    switch (current_mode) {
+        case LOGGER_MODE_TERMINAL_ONLY:
+            LOGGER_Platform_Send(buffer);
+            break;
+            
+        case LOGGER_MODE_SD_ONLY:
+            if (Network_IsConnected()) {
+                Network_SendBinary(buffer, strlen(buffer) + 1);
+            }
+            break;
+            
+        case LOGGER_MODE_DUAL:
+            // 터미널 출력 (실시간)
+            LOGGER_Platform_Send(buffer);
+            // SD 출력 (에러 무시)
+            if (Network_IsConnected()) {
+                Network_SendBinary(buffer, strlen(buffer) + 1);
+            }
+            break;
+    }
 }
