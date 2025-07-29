@@ -197,6 +197,10 @@ void StartReceiveTask(void const * argument);
 // SD 카드 초기화 결과를 저장하는 전역 변수
 int g_sd_initialization_result = -1;  // -1: 초기화 안됨, SDSTORAGE_OK: 성공, 기타: 실패
 
+// 시간 동기화 관리 변수
+static bool g_time_request_sent = false;
+static uint32_t g_join_success_time = 0;
+
 /* USER CODE END 0 */
 
 /**
@@ -1878,6 +1882,8 @@ void StartDefaultTask(void const * argument)
     // LoraStarter 프로세스 실행
     LoraStarter_Process(&lora_ctx, rx_data);
     
+    // JOIN 성공 후 시간 조회는 LoRa 상태 머신에서 자동 처리됨 (TIMEREQ → LTIME)
+    
     // 상태별 처리 간격 및 디버깅 (중요한 상태만)
     static int last_state = -1;
     if (lora_ctx.state != last_state) {
@@ -1913,12 +1919,20 @@ void StartDefaultTask(void const * argument)
         }
         osDelay(2000); // JOIN 명령어 전송 후 2초 대기
         break;
+      case LORA_STATE_SEND_TIMEREQ:
+        osDelay(1000); // TIMEREQ 명령어 전송 후 1초 대기
+        break;
+      case LORA_STATE_SEND_LTIME:
+        osDelay(1000); // LTIME 명령어 전송 후 1초 대기
+        break;
       case LORA_STATE_SEND_PERIODIC:
         osDelay(2000); // SEND 명령어 전송 후 2초 대기
         break;
       case LORA_STATE_WAIT_JOIN_OK:
+      case LORA_STATE_WAIT_TIMEREQ_OK:
+      case LORA_STATE_WAIT_LTIME_RESPONSE:
       case LORA_STATE_WAIT_SEND_RESPONSE:
-        osDelay(3000); // JOIN/SEND 응답 대기 중 3초 간격
+        osDelay(3000); // 응답 대기 중 3초 간격
         break;
       case LORA_STATE_WAIT_SEND_INTERVAL:
         // 주기적 전송 대기 중 - 로그 출력 없이 조용히 대기
@@ -2102,8 +2116,12 @@ void StartReceiveTask(void const * argument)
       // 기본적인 응답 타입 체크 (ResponseHandler에서 상세 로그 출력)
       if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
         LOG_WARN("✅ JOIN CONFIRMED - Network joined successfully");
+        g_join_success_time = HAL_GetTick();  // JOIN 성공 시간 기록
       } else if (strstr(local_buffer, "RAKwireless") != NULL) {
         LOG_DEBUG("📡 LoRa module boot message (ignored)");
+      } else if (ResponseHandler_IsTimeResponse(local_buffer)) {
+        // 시간 응답 처리
+        ResponseHandler_ParseTimeResponse(local_buffer);
       }
       // 나머지 응답 분석은 아래 필터링 로직에서 한 번만 처리
       
@@ -2119,6 +2137,9 @@ void StartReceiveTask(void const * argument)
         is_lora_command_response = true;
       } else if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
         // JOIN 성공 응답
+        is_lora_command_response = true;
+      } else if (ResponseHandler_IsTimeResponse(local_buffer)) {
+        // 시간 응답 - LoRa 상태 머신에도 전달해야 함 (상태 전환을 위해)
         is_lora_command_response = true;
       } else if (strstr(local_buffer, "+EVT:") != NULL) {
         // 기타 LoRa 이벤트 응답들

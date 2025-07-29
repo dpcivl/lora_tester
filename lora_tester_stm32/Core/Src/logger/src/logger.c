@@ -8,6 +8,7 @@
 
 #include "logger.h"
 #include "../SDStorage.h"
+#include "../../Inc/ResponseHandler.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -128,8 +129,16 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
     char buffer[512];
     const char* level_str[] = {"[DEBUG]", "[INFO]", "[WARN]", "[ERROR]"};
     
-    // 레벨 문자열 추가
-    int offset = snprintf(buffer, sizeof(buffer), "%s ", level_str[level]);
+    // 타임스탬프 + 레벨 문자열 추가
+    int offset = 0;
+    const char* network_time = ResponseHandler_GetNetworkTime();
+    if (network_time != NULL && ResponseHandler_IsTimeSynchronized()) {
+        // 네트워크 시간이 있으면 타임스탬프 추가
+        offset = snprintf(buffer, sizeof(buffer), "[%s] %s ", network_time, level_str[level]);
+    } else {
+        // 네트워크 시간이 없으면 기본 형식
+        offset = snprintf(buffer, sizeof(buffer), "%s ", level_str[level]);
+    }
     
     // 가변 인수 처리
     va_list args;

@@ -1,4 +1,4 @@
-../Core/Src/LoraStarter.c:23:20:get_state_name	12
-../Core/Src/LoraStarter.c:40:6:LoraStarter_ConnectUART	1
-../Core/Src/LoraStarter.c:46:6:LoraStarter_InitWithDefaults	3
-../Core/Src/LoraStarter.c:67:6:LoraStarter_Process	37
+../Core/Src/LoraStarter.c:24:20:get_state_name	16
+../Core/Src/LoraStarter.c:45:6:LoraStarter_ConnectUART	1
+../Core/Src/LoraStarter.c:51:6:LoraStarter_InitWithDefaults	3
+../Core/Src/LoraStarter.c:72:6:LoraStarter_Process	45

@@ -1,6 +1,12 @@
 #include "ResponseHandler.h"
 #include "logger.h"
+#include "CommandSender.h"
 #include <string.h>
+#include <stdio.h>
+
+// 전역 변수: 네트워크에서 수신한 시간 정보 저장
+static char g_network_time[64] = {0};
+static bool g_time_synchronized = false;
 
 bool is_response_ok(const char* response)
 {
@@ -64,6 +70,10 @@ bool is_join_response_ok(const char* response)
     if (result) {
         LOG_WARN("[ResponseHandler] ✅ JOIN SUCCESS: %s", response);
         LOG_WARN("[LoRa] 🌐 Network joined successfully - SD logging active");
+        
+        // JOIN 성공 후 시간 조회 요청 (네트워크 동기화 대기 후)
+        LOG_INFO("[ResponseHandler] Requesting network time after JOIN success...");
+        // 짧은 대기 후 시간 조회 (메인 루프에서 처리될 예정)
     } else {
         LOG_DEBUG("[ResponseHandler] Not a JOIN response: '%s'", response);
     }
@@ -95,5 +105,76 @@ ResponseType ResponseHandler_ParseSendResponse(const char* response)
     
     LOG_DEBUG("[ResponseHandler] Unknown SEND response: '%s'", response);
     return RESPONSE_UNKNOWN;
+}
+
+// 시간 응답 확인 함수
+bool ResponseHandler_IsTimeResponse(const char* response)
+{
+    if (response == NULL) {
+        return false;
+    }
+    
+    return (strstr(response, "LTIME:") != NULL || strstr(response, "LTIME=") != NULL);
+}
+
+// 시간 응답 파싱 및 저장 함수
+void ResponseHandler_ParseTimeResponse(const char* response)
+{
+    if (response == NULL || !ResponseHandler_IsTimeResponse(response)) {
+        return;
+    }
+    
+    LOG_DEBUG("[ResponseHandler] Parsing time response: '%s'", response);
+    
+    // LTIME 응답에서 시간 정보 추출 (LTIME: 또는 LTIME= 형식 모두 지원)
+    const char* time_start = strstr(response, "LTIME:");
+    if (time_start != NULL) {
+        // "LTIME: 14h25m30s on 01/29/2025" 형태에서 시간 부분 추출
+        time_start += 6; // "LTIME:" 부분 건너뛰기
+    } else {
+        time_start = strstr(response, "LTIME=");
+        if (time_start != NULL) {
+            // "AT+LTIME=00h00m28s on 01/01/19" 형태에서 시간 부분 추출
+            time_start += 6; // "LTIME=" 부분 건너뛰기
+        }
+    }
+    
+    if (time_start != NULL) {
+        
+        // 앞쪽 공백 제거
+        while (*time_start == ' ') {
+            time_start++;
+        }
+        
+        // 전역 변수에 시간 정보 저장 (개행 문자 제거)
+        strncpy(g_network_time, time_start, sizeof(g_network_time) - 1);
+        g_network_time[sizeof(g_network_time) - 1] = '\0';
+        
+        // 개행 문자 제거
+        char* newline = strchr(g_network_time, '\r');
+        if (newline) *newline = '\0';
+        newline = strchr(g_network_time, '\n');
+        if (newline) *newline = '\0';
+        
+        g_time_synchronized = true;
+        
+        LOG_WARN("[LoRa] 🕐 Network time synchronized: %s", g_network_time);
+        LOG_WARN("[TIMESTAMP] Network time: %s", g_network_time);
+    }
+}
+
+// 현재 저장된 네트워크 시간 반환
+const char* ResponseHandler_GetNetworkTime(void)
+{
+    if (g_time_synchronized) {
+        return g_network_time;
+    }
+    return NULL;
+}
+
+// 시간 동기화 상태 확인
+bool ResponseHandler_IsTimeSynchronized(void)
+{
+    return g_time_synchronized;
 }
 

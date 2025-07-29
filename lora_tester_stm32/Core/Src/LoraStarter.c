@@ -15,6 +15,7 @@ const char* LORA_DEFAULT_INIT_COMMANDS[] = {
     "AT+NJM=1\r\n",     // OTAA 모드 설정
     "AT+CLASS=A\r\n",   // Class A 설정
     "AT+BAND=7\r\n"     // Asia 923 MHz 대역 설정
+    // AT+TIMEREQ=1은 JOIN 후에 별도로 실행
 };
 
 const int LORA_DEFAULT_INIT_COMMANDS_COUNT = sizeof(LORA_DEFAULT_INIT_COMMANDS) / sizeof(LORA_DEFAULT_INIT_COMMANDS[0]);
@@ -27,6 +28,10 @@ static const char* get_state_name(LoraState state) {
         case LORA_STATE_WAIT_OK: return "WAIT_OK";
         case LORA_STATE_SEND_JOIN: return "SEND_JOIN";
         case LORA_STATE_WAIT_JOIN_OK: return "WAIT_JOIN_OK";
+        case LORA_STATE_SEND_TIMEREQ: return "SEND_TIMEREQ";
+        case LORA_STATE_WAIT_TIMEREQ_OK: return "WAIT_TIMEREQ_OK";
+        case LORA_STATE_SEND_LTIME: return "SEND_LTIME";
+        case LORA_STATE_WAIT_LTIME_RESPONSE: return "WAIT_LTIME_RESPONSE";
         case LORA_STATE_SEND_PERIODIC: return "SEND_PERIODIC";
         case LORA_STATE_WAIT_SEND_RESPONSE: return "WAIT_SEND_RESPONSE";
         case LORA_STATE_WAIT_SEND_INTERVAL: return "WAIT_SEND_INTERVAL";
@@ -124,12 +129,45 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
         case LORA_STATE_WAIT_JOIN_OK:
             if (uart_rx && is_join_response_ok(uart_rx)) {
                 LORA_LOG_JOIN_SUCCESS();
-                ctx->state = LORA_STATE_SEND_PERIODIC;
+                ctx->state = LORA_STATE_SEND_TIMEREQ; // JOIN 후 시간 동기화 요청으로 전환
                 ctx->send_count = 0;
                 ctx->error_count = 0; // JOIN 성공 시 에러 카운터 리셋
                 ctx->retry_delay_ms = 1000; // 재시도 지연 시간 리셋
                 ctx->last_retry_time = 0; // 재시도 시간 리셋
-                LOG_WARN("[LoRa] 🚀 PERIODIC SEND STARTED with message: %s", ctx->send_message);
+                LOG_INFO("[LoRa] JOIN successful, requesting time synchronization...");
+            }
+            break;
+        case LORA_STATE_SEND_TIMEREQ:
+            LOG_INFO("[LoRa] Sending time synchronization request...");
+            CommandSender_Send("AT+TIMEREQ=1\r\n");
+            ctx->state = LORA_STATE_WAIT_TIMEREQ_OK;
+            break;
+        case LORA_STATE_WAIT_TIMEREQ_OK:
+            if (uart_rx && is_response_ok(uart_rx)) {
+                LOG_WARN("[LoRa] ✅ Time synchronization enabled");
+                ctx->state = LORA_STATE_SEND_LTIME;
+            }
+            break;
+        case LORA_STATE_SEND_LTIME:
+            LOG_INFO("[LoRa] Requesting network time...");
+            CommandSender_Send("AT+LTIME=?\r\n");
+            ctx->state = LORA_STATE_WAIT_LTIME_RESPONSE;
+            break;
+        case LORA_STATE_WAIT_LTIME_RESPONSE:
+            if (uart_rx) {
+                LOG_DEBUG("[LoRa] LTIME response received: '%s'", uart_rx);
+                
+                // ResponseHandler에서 시간 응답 파싱 처리
+                if (ResponseHandler_IsTimeResponse(uart_rx)) {
+                    ResponseHandler_ParseTimeResponse(uart_rx);
+                    LOG_WARN("[LoRa] 🕐 Network time received, starting periodic transmission");
+                    ctx->state = LORA_STATE_SEND_PERIODIC;
+                    LOG_WARN("[LoRa] 🚀 PERIODIC SEND STARTED with message: %s", ctx->send_message);
+                } else {
+                    LOG_DEBUG("[LoRa] Waiting for LTIME response, got: '%s'", uart_rx);
+                }
+            } else {
+                LOG_DEBUG("[LoRa] WAIT_LTIME_RESPONSE: No uart_rx data received");
             }
             break;
         case LORA_STATE_SEND_PERIODIC:

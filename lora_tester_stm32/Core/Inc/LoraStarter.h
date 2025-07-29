@@ -11,6 +11,10 @@ typedef enum {
     LORA_STATE_WAIT_OK,
     LORA_STATE_SEND_JOIN,
     LORA_STATE_WAIT_JOIN_OK,
+    LORA_STATE_SEND_TIMEREQ,       // 시간 동기화 요청 상태 (JOIN 후)
+    LORA_STATE_WAIT_TIMEREQ_OK,    // 시간 동기화 응답 대기
+    LORA_STATE_SEND_LTIME,         // 시간 조회 요청 상태
+    LORA_STATE_WAIT_LTIME_RESPONSE, // 시간 조회 응답 대기
     LORA_STATE_SEND_PERIODIC,      // 주기적 송신 상태
     LORA_STATE_WAIT_SEND_RESPONSE, // 송신 응답 대기
     LORA_STATE_WAIT_SEND_INTERVAL, // 주기적 송신 대기 (타이머)
