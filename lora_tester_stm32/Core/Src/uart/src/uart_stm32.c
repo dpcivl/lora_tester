@@ -182,7 +182,7 @@ UartStatus UART_Platform_Receive(char* buffer, int buffer_size, int* bytes_recei
         
         // 실제 수신된 바이트 수 확인
         uint16_t received_length = uart_rx_length;
-        LOG_INFO("[UART_STM32] DMA received %d bytes", received_length);
+        LOG_DEBUG("[UART_STM32] DMA received %d bytes", received_length);
         
         if (received_length > 0 && received_length <= buffer_size - 1) {
             // 데이터 복사
@@ -191,7 +191,7 @@ UartStatus UART_Platform_Receive(char* buffer, int buffer_size, int* bytes_recei
             *bytes_received = received_length;
             
             // 수신된 데이터 로그 (간단하게)
-            LOG_INFO("[UART_STM32] Received data (%d bytes): '%s'", received_length, buffer);
+            LOG_DEBUG("[UART_STM32] Received data (%d bytes): '%s'", received_length, buffer);
             
             // 새로운 수신을 위해 DMA 완전 리셋 후 재시작
             memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -279,7 +279,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     // DMA 수신 완료 (전체 버퍼) - 거의 발생하지 않음
     uart_rx_complete_flag = 1;
     uart_rx_length = sizeof(rx_buffer);
-    LOG_INFO("[DMA] RxCpltCallback: Full buffer received (%d bytes)", uart_rx_length);
+    LOG_DEBUG("[DMA] RxCpltCallback: Full buffer received (%d bytes)", uart_rx_length);
   }
 }
 
@@ -359,7 +359,7 @@ void USER_UART_IDLECallback(UART_HandleTypeDef *huart)
       if (error_flags != 0) {
         LOG_WARN("[DMA] IDLE detected: %d bytes received (UART errors: 0x%02lX)", uart_rx_length, error_flags);
       } else {
-        LOG_INFO("[DMA] IDLE detected: %d bytes received", uart_rx_length);
+        LOG_DEBUG("[DMA] IDLE detected: %d bytes received", uart_rx_length);
       }
       
       // 첫 몇 바이트 확인 (디버깅용)

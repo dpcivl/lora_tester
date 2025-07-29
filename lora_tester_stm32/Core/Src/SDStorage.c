@@ -233,55 +233,57 @@ int SDStorage_WriteLog(const void* data, size_t size)
     }
 
 #ifdef STM32F746xx
-    // STM32 환경: 안전한 파일 쓰기 (블로킹 방지)
-    LOG_INFO("[SDStorage] WriteLog: size=%d bytes, file_open=%s", 
-             size, g_file_open ? "true" : "false");
-    
+    // STM32 환경: FatFs 파일 쓰기
     if (!g_file_open) {
-        LOG_INFO("[SDStorage] Attempting safe f_open for writing...");
+        // 파일이 닫혀있는 경우에만 새로 열기 (보통 첫 번째 호출)
+        if (strlen(g_current_log_file) == 0) {
+            if (_generate_log_filename(g_current_log_file, sizeof(g_current_log_file)) != SDSTORAGE_OK) {
+                LOG_ERROR("[SDStorage] Failed to generate log filename");
+                return SDSTORAGE_ERROR;
+            }
+        }
         
-        // 간단한 파일명으로 다시 시도 (긴 경로명 문제 가능성)
-        LOG_INFO("[SDStorage] Trying simple filename to avoid path issues...");
-        
-        // 루트 디렉토리에 간단한 파일명 사용
-        strcpy(g_current_log_file, "log.txt");
-        LOG_INFO("[SDStorage] Using simple filename: %s", g_current_log_file);
-        
-        // FatFs f_open 시도
-        LOG_INFO("[SDStorage] Attempting FatFs f_open for Windows-compatible logging");
-        
-        // 실제 f_open 시도 (test.txt와 동일한 방식)
+        // FatFs f_open 시도 (파일이 없으면 생성, 있으면 덮어쓰기)
         FRESULT open_result = f_open(&g_log_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
-        LOG_INFO("[SDStorage] f_open result: %d", open_result);
         
         if (open_result == FR_OK) {
             g_file_open = true;
-            LOG_INFO("[SDStorage] File opened successfully for writing");
+            LOG_DEBUG("[SDStorage] Log file opened for continuous logging: %s", g_current_log_file);
         } else {
-            LOG_ERROR("[SDStorage] f_open failed: %d - SD logging will be disabled", open_result);
-            g_file_open = false;  // FatFs 모드 비활성화
+            LOG_ERROR("[SDStorage] f_open failed: %d - SD logging disabled", open_result);
+            g_file_open = false;
+            return SDSTORAGE_FILE_ERROR;
         }
     }
     
     if (g_file_open) {
-        // FatFs 파일 쓰기 (Windows 호환)
-        LOG_INFO("[SDStorage] Writing %d bytes using FatFs (for Windows compatibility)", size);
-        
+        // FatFs 파일 쓰기 (Windows 호환) - 줄바꿈 자동 추가
         UINT bytes_written;
-        FRESULT write_result = f_write(&g_log_file, data, size, &bytes_written);
-        LOG_INFO("[SDStorage] f_write result: %d, bytes_written: %d", write_result, bytes_written);
         
-        if (write_result != FR_OK) {
-            LOG_ERROR("[SDStorage] f_write failed: %d - SD logging disabled", write_result);
-            g_file_open = false;  // FatFs 모드 비활성화
-        } else if (bytes_written != size) {
-            LOG_WARN("[SDStorage] Partial write: %d/%d bytes", bytes_written, size);
-            return SDSTORAGE_DISK_FULL;
+        // 원본 데이터 쓰기
+        FRESULT write_result = f_write(&g_log_file, data, size, &bytes_written);
+        
+        if (write_result == FR_OK && bytes_written == size) {
+            // 줄바꿈 추가 (Windows 호환을 위해 \r\n 사용)
+            UINT newline_written;
+            FRESULT newline_result = f_write(&g_log_file, "\r\n", 2, &newline_written);
+            
+            if (newline_result == FR_OK) {
+                g_current_log_size += bytes_written + newline_written;
+                return SDSTORAGE_OK;
+            } else {
+                LOG_WARN("[SDStorage] Newline write failed: %d", newline_result);
+                g_current_log_size += bytes_written;  // 원본 데이터는 성공했으므로 카운트
+                return SDSTORAGE_OK;  // 원본 데이터 쓰기는 성공했으므로 OK 반환
+            }
         } else {
-            // FatFs 쓰기 성공
-            LOG_INFO("[SDStorage] FatFs write successful");
-            g_current_log_size += bytes_written;
-            return SDSTORAGE_OK;
+            if (write_result != FR_OK) {
+                LOG_ERROR("[SDStorage] f_write failed: %d - SD logging disabled", write_result);
+                g_file_open = false;
+            } else if (bytes_written != size) {
+                LOG_WARN("[SDStorage] Partial write: %d/%d bytes", bytes_written, size);
+                return SDSTORAGE_DISK_FULL;
+            }
         }
     }
     
@@ -293,9 +295,10 @@ int SDStorage_WriteLog(const void* data, size_t size)
     }
     
     // 즉시 플러시하여 데이터 안정성 확보
-    LOG_INFO("[SDStorage] Syncing file to SD card...");
     FRESULT sync_result = f_sync(&g_log_file);
-    LOG_INFO("[SDStorage] f_sync result: %d", sync_result);
+    if (sync_result != FR_OK) {
+        LOG_WARN("[SDStorage] f_sync failed: %d", sync_result);
+    }
 #else
     // PC/테스트 환경: 파일 I/O 시뮬레이션 (항상 성공)
     // 실제 파일 쓰기 없이 성공으로 처리
@@ -372,10 +375,9 @@ int SDStorage_CreateNewLogFile(void)
         return SDSTORAGE_FILE_ERROR;
     }
     
-    LOG_INFO("[SDStorage] File created successfully, closing...");
-    f_close(&g_log_file);
-    g_file_open = false;
-    LOG_INFO("[SDStorage] File closed, ready for logging");
+    LOG_INFO("[SDStorage] File created successfully, keeping open for logging");
+    g_file_open = true;  // 파일을 열어둔 상태로 유지
+    LOG_INFO("[SDStorage] File ready for immediate logging");
 #else
     // PC/테스트 환경: 파일 생성 시뮬레이션 (항상 성공)
     LOG_INFO("[SDStorage] Test environment - file creation simulated");
@@ -431,17 +433,45 @@ static int _create_log_directory(void)
 
 static int _generate_log_filename(char* filename, size_t max_len)
 {
-    // 8.3 형식 파일명 생성 (시간 불필요)
-    static int file_counter = 1;
+    // 8.3 형식 파일명 생성 - 기존 파일 확인하여 중복 방지
+    static int file_counter = 0;  // 0부터 시작하여 첫 번째 호출에서 1로 설정
+    
+    // 첫 번째 호출에서만 기존 파일 확인
+    if (file_counter == 0) {
+        file_counter = 1;
+        
+        // 기존 파일들 확인하여 다음 번호 찾기
+        for (int i = 1; i <= 9999; i++) {
+            char test_filename[256];
+            FIL test_file;
+            
+            if (g_directory_available) {
+                snprintf(test_filename, sizeof(test_filename), "lora_logs/LORA%04d.TXT", i);
+            } else {
+                snprintf(test_filename, sizeof(test_filename), "LORA%04d.TXT", i);
+            }
+            
+            // 파일이 존재하는지 확인
+            FRESULT test_result = f_open(&test_file, test_filename, FA_READ);
+            if (test_result == FR_OK) {
+                f_close(&test_file);
+                file_counter = i + 1;  // 다음 번호로 설정
+            } else {
+                break;  // 파일이 없으면 현재 번호 사용
+            }
+        }
+        
+        LOG_DEBUG("[SDStorage] Auto-detected next log file number: %d", file_counter);
+    }
     
     // 디렉토리 사용 가능 여부에 따라 경로 결정
     int result;
     if (g_directory_available) {
-        // lora_logs 디렉토리에 파일 생성 (8.3 형식)
-        result = snprintf(filename, max_len, "lora_logs/LORA%04d.BIN", file_counter);
+        // lora_logs 디렉토리에 파일 생성 (TXT 형식)
+        result = snprintf(filename, max_len, "lora_logs/LORA%04d.TXT", file_counter);
     } else {
-        // 루트 디렉토리에 파일 생성 (8.3 형식)
-        result = snprintf(filename, max_len, "LORA%04d.BIN", file_counter);
+        // 루트 디렉토리에 파일 생성 (TXT 형식)
+        result = snprintf(filename, max_len, "LORA%04d.TXT", file_counter);
     }
     
     file_counter++;

@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "string.h"
+#include "stdio.h"
 #include "cmsis_os.h"
 #include "fatfs.h"
 #include "usb_host.h"
@@ -332,13 +333,15 @@ int main(void)
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* 수신 태스크 비활성화 - SD 카드 테스트에는 불필요 */
-  LOG_INFO("📤 Receive Task disabled for SD card testing");
-  LOG_INFO("📤 This eliminates UART receive errors during SD testing");
+  /* 수신 태스크 활성화 - LoRa 통신을 위해 필수 */
+  osThreadDef(receiveTask, StartReceiveTask, osPriorityNormal, 0, 4096);
+  receiveTaskHandle = osThreadCreate(osThread(receiveTask), NULL);
+  LOG_INFO("📤 Receive Task enabled for LoRa communication");
   
-  /* SD 로깅 태스크 임시 비활성화 - 메모리 부족 문제 */
-  LOG_INFO("📤 SD Logging Task disabled temporarily due to memory constraints");
-  LOG_INFO("📤 SD card testing will be performed in Default Task instead");
+  /* SD 로깅 태스크 활성화 - SD 카드 로깅을 위해 */
+  osThreadDef(sdLoggingTask, StartSDLoggingTask, osPriorityLow, 0, 4096);
+  sdLoggingTaskHandle = osThreadCreate(osThread(sdLoggingTask), NULL);
+  LOG_INFO("📤 SD Logging Task enabled");
   /* USER CODE END RTOS_THREADS */
 
   /* Start scheduler */
@@ -1807,43 +1810,19 @@ void StartDefaultTask(void const * argument)
     LOG_INFO("📺 [TX_TASK] Continuing with terminal-only logging");
   }
 
-  // SD 카드 테스트 완료 - 간단한 주기적 SD 로깅 테스트
-  LOG_INFO("📤 [TX_TASK] Starting periodic SD logging test...");
-  
-  int test_counter = 0;
-  
-  for(;;) {
-    test_counter++;
-    
-    if (g_sd_initialization_result == SDSTORAGE_OK) {
-      // SD 카드에 주기적으로 로그 작성
-      char test_log[128];
-      snprintf(test_log, sizeof(test_log), 
-               "Periodic test #%d - Time: %lu ms\n", 
-               test_counter, HAL_GetTick());
-      
-      int write_result = SDStorage_WriteLog(test_log, strlen(test_log));
-      if (write_result == SDSTORAGE_OK) {
-        LOG_INFO("✅ [TX_TASK] Periodic SD write #%d SUCCESS", test_counter);
-      } else {
-        LOG_ERROR("❌ [TX_TASK] Periodic SD write #%d FAILED (code: %d)", 
-                  test_counter, write_result);
-      }
-    } else {
-      LOG_INFO("📺 [TX_TASK] Terminal log #%d - SD not available", test_counter);
-    }
-    
-    // 30초 간격으로 테스트
-    osDelay(30000);
-    
-    // 10회 테스트 후 종료
-    if (test_counter >= 10) {
-      LOG_INFO("🎉 [TX_TASK] SD card testing completed (10 cycles)");
-      break;
-    }
-  }
+  // SD 테스트 건너뛰고 바로 LoRa 시작
   
   LOG_INFO("📤 [TX_TASK] Starting LoRa initialization and JOIN...");
+  
+  // UART 연결 (LoRa 통신을 위해 필수)
+  LOG_INFO("📤 [TX_TASK] Connecting to UART for LoRa communication...");
+  UartStatus uart_status = UART_Connect("UART6");
+  if (uart_status == UART_STATUS_OK) {
+    LOG_INFO("✅ [TX_TASK] UART connection successful");
+  } else {
+    LOG_ERROR("❌ [TX_TASK] UART connection failed (status: %d)", uart_status);
+  }
+  
   LOG_INFO("📤 [TX_TASK] Waiting for LoRa module boot-up (5 seconds - optimized for long-term test)...");
   osDelay(5000); // 5초 대기 (장기 테스트를 위해 단축)
   
@@ -1855,134 +1834,28 @@ void StartDefaultTask(void const * argument)
   LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
            lora_ctx.num_commands, lora_ctx.send_message, lora_ctx.max_retry_count);
            
-  // SD 테스트 건너뛰기 - 장기 테스트를 위한 블로킹 방지
-  LOG_INFO("📤 [TX_TASK] SD card tests bypassed for long-term stability");
+  // SD 카드 로깅 설정 (간단한 방식)
   extern int g_sd_initialization_result; // main()에서 설정된 SD 결과
-  // SD 초기화가 건너뛰어졌으므로 모든 SD 테스트도 건너뛰기
-  if (false) { // g_sd_initialization_result == SDSTORAGE_OK 비활성화
-    LOG_INFO("🧪 Testing basic SD card write functionality...");
-    
-    // HAL 레벨 직접 쓰기/읽기 테스트
-    extern SD_HandleTypeDef hsd1;
-    static uint8_t test_write_buffer[512];
-    static uint8_t test_read_buffer[512];
-    
-    // 테스트 데이터 준비 (간단한 패턴)
-    for(int i = 0; i < 512; i++) {
-      test_write_buffer[i] = (uint8_t)(i % 256);
-    }
-    
-    // SD카드 상태 재확인
-    HAL_SD_CardStateTypeDef card_state_before = HAL_SD_GetCardState(&hsd1);
-    LOG_INFO("📋 SD card state before write: %d", card_state_before);
-    
-    // SD카드 정보 확인
-    HAL_SD_CardInfoTypeDef card_info;
-    HAL_StatusTypeDef info_result = HAL_SD_GetCardInfo(&hsd1, &card_info);
-    LOG_INFO("📋 HAL_SD_GetCardInfo result: %d", info_result);
-    if(info_result == HAL_OK) {
-      LOG_INFO("📋 Card LogBlockNbr: %lu, LogBlockSize: %lu", card_info.LogBlockNbr, card_info.LogBlockSize);
-      LOG_INFO("📋 Card Type: %lu, Class: %lu", card_info.CardType, card_info.Class);
-    }
-    
-    LOG_INFO("📝 Writing test pattern to sector 2000...");
-    HAL_StatusTypeDef write_result = HAL_SD_WriteBlocks(&hsd1, test_write_buffer, 2000, 1, 5000);
-    LOG_INFO("📝 HAL_SD_WriteBlocks result: %d", write_result);
-    
-    // 쓰기 실패 시 에러 상태 분석
-    if(write_result != HAL_OK) {
-      HAL_SD_CardStateTypeDef card_state_after = HAL_SD_GetCardState(&hsd1);
-      LOG_ERROR("📋 SD card state after failed write: %d", card_state_after);
-      LOG_ERROR("📋 SDMMC ErrorCode: 0x%08lX", hsd1.ErrorCode);
-      
-      // 일반적인 HAL 상태 코드 해석
-      switch(write_result) {
-        case HAL_ERROR:
-          LOG_ERROR("📋 HAL_ERROR - General error occurred");
-          break;
-        case HAL_BUSY:
-          LOG_ERROR("📋 HAL_BUSY - SD card is busy");
-          break;
-        case HAL_TIMEOUT:
-          LOG_ERROR("📋 HAL_TIMEOUT - Operation timed out");
-          break;
-        default:
-          LOG_ERROR("📋 Unknown HAL status: %d", write_result);
-          break;
-      }
-    }
-    
-    if(write_result == HAL_OK) {
-      // 쓰기 후 약간의 지연
-      osDelay(100);
-      
-      LOG_INFO("📖 Reading back from sector 2000...");
-      HAL_StatusTypeDef read_result = HAL_SD_ReadBlocks(&hsd1, test_read_buffer, 2000, 1, 5000);
-      LOG_INFO("📖 HAL_SD_ReadBlocks result: %d", read_result);
-      
-      if(read_result == HAL_OK) {
-        // 데이터 검증
-        int match_count = 0;
-        int mismatch_count = 0;
-        
-        for(int i = 0; i < 512; i++) {
-          if(test_write_buffer[i] == test_read_buffer[i]) {
-            match_count++;
-          } else {
-            mismatch_count++;
-            if(mismatch_count <= 5) { // 처음 5개 불일치만 출력
-              LOG_WARN("📊 Mismatch at byte %d: wrote 0x%02X, read 0x%02X", 
-                       i, test_write_buffer[i], test_read_buffer[i]);
-            }
-          }
-        }
-        
-        LOG_INFO("📊 Data verification: %d matches, %d mismatches out of 512 bytes", 
-                 match_count, mismatch_count);
-        
-        if(mismatch_count == 0) {
-          LOG_INFO("✅ SD card basic write/read test PASSED - data integrity OK");
-        } else {
-          LOG_WARN("⚠️ SD card write/read test FAILED - data corruption detected");
-          LOG_WARN("💡 SD card may have wear-out or controller issues");
-        }
-      } else {
-        LOG_ERROR("❌ Read back failed after successful write");
-      }
-    } else {
-      LOG_ERROR("❌ Basic write test failed");
-    }
-    
-    // SD 초기화 성공: SD 백엔드 준비
-    LOG_INFO("🔄 Setting up SD logging backend...");
-    Network_SetBackend(NETWORK_BACKEND_SD_CARD);  // SD 백엔드로 설정
-    int network_result = Network_InitSD();
-    if (network_result == 0) {
-      LOG_INFO("✅ SD logging backend ready - will switch before LoRa operations");
-      LOG_INFO("🗂️ LoRa logs location: lora_logs/ directory on SD card");
-    } else {
-      LOG_WARN("⚠️ SD logging setup failed (code: %d) - using terminal only", network_result);
-    }
+  if (g_sd_initialization_result == SDSTORAGE_OK) {
+    LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
   } else {
     LOG_INFO("📺 LoRa logs will be displayed on terminal only (SD not available)");
   }
   
-  // LoRa 시작 전: 로깅 모드 전환 (터미널 → SD 전용)
-  LOG_INFO("🔄 Switching to SD-only logging for LoRa operations...");
-  LOG_INFO("🎯 Only WARN/ERROR level logs will be saved to SD card");
-  
-  // SD 태스크 상태에 따라 로깅 모드 동적 결정 (나중에 SD 준비되면 자동 전환)
-  if (g_sd_logging_active) {
-    LOGGER_SetMode(LOGGER_MODE_DUAL);
-    LOGGER_SetFilterLevel(LOG_LEVEL_WARN);  // SD에는 WARN 이상만 저장
-    LOG_WARN("✅ Logger switched to DUAL mode (Terminal + SD async)");
+  // LoRa 로깅 모드 설정 (터미널에서 모든 로그를 보기 위해 INFO 레벨 유지)
+  if (g_sd_initialization_result == SDSTORAGE_OK) {
+    LOGGER_SetMode(LOGGER_MODE_DUAL);  // 터미널 + SD 동시 출력
+    LOGGER_SetFilterLevel(LOG_LEVEL_INFO);  // 터미널에서 모든 로그 확인 가능
+    LOG_WARN("✅ LoRa logging mode: DUAL (Terminal + SD), INFO level for debugging");
   } else {
     LOGGER_SetMode(LOGGER_MODE_TERMINAL_ONLY);
     LOGGER_SetFilterLevel(LOG_LEVEL_INFO);
-    LOG_INFO("📺 Logger starting in terminal-only mode (SD init in progress)");
+    LOG_INFO("📺 LoRa logging mode: Terminal only");
   }
   
   // LoRa 프로세스 루프 (초기화 → JOIN → 주기적 전송)
+  LOG_INFO("📤 [TX_TASK] Starting LoRa process loop...");
+  
   for(;;)
   {
     // 수신된 응답이 있으면 LoraStarter에 전달
@@ -1990,15 +1863,25 @@ void StartDefaultTask(void const * argument)
     if (lora_new_response) {
       rx_data = lora_rx_response;
       lora_new_response = false; // 플래그 클리어
-      LOG_DEBUG("[TX_TASK] Processing LoRa response: %.20s...", rx_data);
+      // 응답 처리 - 로그는 ResponseHandler에서 이미 출력됨
     }
     
     // LoraStarter 프로세스 실행
     LoraStarter_Process(&lora_ctx, rx_data);
     
-    // 상태별 처리 간격 및 디버깅
-    LOG_DEBUG("[TX_TASK] LoRa State: %d, cmd_index: %d/%d", 
-              lora_ctx.state, lora_ctx.cmd_index, lora_ctx.num_commands);
+    // 상태별 처리 간격 및 디버깅 (중요한 상태만)
+    static int last_state = -1;
+    if (lora_ctx.state != last_state) {
+      // JOIN, SEND, ERROR 등 중요한 상태 변경만 로그 출력
+      if (lora_ctx.state == LORA_STATE_SEND_JOIN || 
+          lora_ctx.state == LORA_STATE_SEND_PERIODIC ||
+          lora_ctx.state == LORA_STATE_DONE ||
+          lora_ctx.state == LORA_STATE_ERROR) {
+        LOG_INFO("[TX_TASK] ⚙️ LoRa State: %d, cmd_index: %d/%d", 
+                  lora_ctx.state, lora_ctx.cmd_index, lora_ctx.num_commands);
+      }
+      last_state = lora_ctx.state;
+    }
     
     switch(lora_ctx.state) {
       case LORA_STATE_INIT:
@@ -2010,8 +1893,7 @@ void StartDefaultTask(void const * argument)
         osDelay(1000); // 명령어 전송 후 1초 대기
         break;
       case LORA_STATE_WAIT_OK:
-        LOG_DEBUG("[TX_TASK] ⏳ Waiting for OK response to command %d", 
-                 lora_ctx.cmd_index + 1);
+        // OK 응답 대기 중 - 조용히 대기
         osDelay(2000); // OK 응답 대기 중 2초 간격
         break;
       case LORA_STATE_SEND_JOIN:
@@ -2023,7 +1905,7 @@ void StartDefaultTask(void const * argument)
         osDelay(3000); // JOIN/SEND 응답 대기 중 3초 간격
         break;
       case LORA_STATE_WAIT_SEND_INTERVAL:
-        LOG_DEBUG("[TX_TASK] ⏳ Waiting for send interval (%u ms)", lora_ctx.send_interval_ms);
+        // 주기적 전송 대기 중 - 로그 출력 없이 조용히 대기
         osDelay(5000); // 주기적 전송 대기 중 5초 간격으로 체크
         break;
       case LORA_STATE_JOIN_RETRY:
@@ -2189,39 +2071,25 @@ void StartReceiveTask(void const * argument)
     // 디버깅용: 수신 상태 체크 (에러 상태일 때만)
     static uint32_t debug_counter = 0;
     debug_counter++;
-    if (debug_counter % 200 == 0 && status != UART_STATUS_TIMEOUT) {  // 10초마다, 타임아웃 제외
-      LOG_INFO("[RX_TASK] Status check #%lu: status=%d, bytes=%d", 
-               debug_counter / 200, status, local_bytes_received);
+    if (debug_counter % 1200 == 0 && status != UART_STATUS_TIMEOUT) {  // 1분마다, 타임아웃 제외
+      LOG_DEBUG("[RX_TASK] Status check #%lu: status=%d, bytes=%d", 
+               debug_counter / 1200, status, local_bytes_received);
     }
     
     if (status == UART_STATUS_OK && local_bytes_received > 0) {
-      // 수신 완료 - TDD ResponseHandler로 분석
-      LOG_INFO("📥 RECV: '%s' (%d bytes)", local_buffer, local_bytes_received);
+      // 수신 완료 - 간단한 수신 로그 + ResponseHandler 분석
+      LOG_INFO("📥 RECV: '%.30s%s' (%d bytes)", 
+               local_buffer, 
+               (local_bytes_received > 30) ? "..." : "", 
+               local_bytes_received);
       
-      // TDD ResponseHandler를 사용하여 응답 분석
-      if (is_response_ok(local_buffer)) {
-        LOG_INFO("✅ OK response");
-      } else if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
+      // 기본적인 응답 타입 체크 (ResponseHandler에서 상세 로그 출력)
+      if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
         LOG_WARN("✅ JOIN CONFIRMED - Network joined successfully");
       } else if (strstr(local_buffer, "RAKwireless") != NULL) {
-        LOG_INFO("📡 LoRa module boot message (ignored)");
-      } else {
-        ResponseType response_type = ResponseHandler_ParseSendResponse(local_buffer);
-        switch (response_type) {
-          case RESPONSE_OK:
-            LOG_INFO("✅ OK");
-            break;
-          case RESPONSE_ERROR:
-            LOG_WARN("⚠️ ERROR");
-            break;
-          case RESPONSE_TIMEOUT:
-            LOG_WARN("⚠️ TIMEOUT");
-            break;
-          case RESPONSE_UNKNOWN:
-            LOG_INFO("❓ UNKNOWN format: %.20s...", local_buffer);  // 처음 20자만 표시
-            break;
-        }
+        LOG_DEBUG("📡 LoRa module boot message (ignored)");
       }
+      // 나머지 응답 분석은 아래 필터링 로직에서 한 번만 처리
       
       // 전역 변수에 복사 (다른 태스크에서 사용 가능)
       memcpy(rx_buffer, local_buffer, local_bytes_received);
