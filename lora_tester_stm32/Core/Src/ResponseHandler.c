@@ -117,6 +117,44 @@ bool ResponseHandler_IsTimeResponse(const char* response)
     return (strstr(response, "LTIME:") != NULL || strstr(response, "LTIME=") != NULL);
 }
 
+// 한국 시간대(UTC+9) 보정 함수
+static void ConvertUTCToKST(char* time_str) {
+    int hour, min, sec, month, day, year;
+    
+    // "01h51m37s on 07/29/2025" 형식에서 시간 추출
+    if (sscanf(time_str, "%dh%dm%ds on %d/%d/%d", 
+               &hour, &min, &sec, &month, &day, &year) == 6) {
+        
+        // 한국 시간대로 보정 (UTC+9)
+        hour += 9;
+        
+        // 날짜 넘어가는 경우 처리
+        if (hour >= 24) {
+            hour -= 24;
+            day += 1;
+            
+            // 월말 처리 (간단한 버전)
+            int days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+            if (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
+                days_in_month[1] = 29; // 윤년
+            }
+            
+            if (day > days_in_month[month - 1]) {
+                day = 1;
+                month += 1;
+                if (month > 12) {
+                    month = 1;
+                    year += 1;
+                }
+            }
+        }
+        
+        // 한국 시간으로 수정된 시간 문자열 재구성
+        snprintf(time_str, 64, "%02dh%02dm%02ds on %02d/%02d/%d (KST)", 
+                 hour, min, sec, month, day, year);
+    }
+}
+
 // 시간 응답 파싱 및 저장 함수
 void ResponseHandler_ParseTimeResponse(const char* response)
 {
@@ -156,10 +194,13 @@ void ResponseHandler_ParseTimeResponse(const char* response)
         newline = strchr(g_network_time, '\n');
         if (newline) *newline = '\0';
         
+        // 한국 시간대로 보정
+        ConvertUTCToKST(g_network_time);
+        
         g_time_synchronized = true;
         
-        LOG_WARN("[LoRa] 🕐 Network time synchronized: %s", g_network_time);
-        LOG_WARN("[TIMESTAMP] Network time: %s", g_network_time);
+        LOG_WARN("[LoRa] 🕐 Network time synchronized (KST): %s", g_network_time);
+        LOG_WARN("[TIMESTAMP] Korean time: %s", g_network_time);
     }
 }
 

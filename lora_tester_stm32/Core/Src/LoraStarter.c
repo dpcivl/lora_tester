@@ -170,7 +170,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                     } else {
                         // SEND 후 시간 조회 - 다음 전송 대기
                         LOG_WARN("[LoRa] 🕐 Time logged after SEND, waiting for next interval");
-                        ctx->state = LORA_STATE_WAIT_SEND_INTERVAL;
+                        ctx->state = LORA_STATE_SEND_PERIODIC;
                         ctx->last_send_time = TIME_GetCurrentMs(); // 마지막 송신 시간 저장
                     }
                 } else {
@@ -208,7 +208,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                     case RESPONSE_OK:
                         LORA_LOG_SEND_SUCCESS();
                         // SEND 성공 후 시간 정보 조회를 위해 LTIME 상태로 전환
-                        ctx->state = LORA_STATE_SEND_LTIME;
+                        ctx->state = LORA_STATE_WAIT_SEND_INTERVAL;
                         ctx->error_count = 0; // 성공 시 에러 카운터 리셋
                         ctx->retry_delay_ms = 1000; // 재시도 지연 시간 리셋
                         LOG_INFO("[LoRa] SEND successful, requesting current time for logging...");
@@ -246,8 +246,9 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 uint32_t interval_ms = (ctx->send_interval_ms > 0) ? ctx->send_interval_ms : 30000; // 기본값 30초
                 
                 if ((current_time - ctx->last_send_time) >= interval_ms) {
-                    LOG_DEBUG("[LoRa] Send interval passed (%u ms), ready for next send", interval_ms);
-                    ctx->state = LORA_STATE_SEND_PERIODIC;
+                    LOG_DEBUG("[LoRa] Send interval passed (%u ms), requesting time before next send", interval_ms);
+                    // 주기적 전송 시 시간 조회 먼저 실행
+                    ctx->state = LORA_STATE_SEND_LTIME;
                 } else {
                     // 아직 대기 시간이 남았으므로 상태 유지
                     uint32_t remaining_ms = interval_ms - (current_time - ctx->last_send_time);
