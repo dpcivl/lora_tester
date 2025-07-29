@@ -30,10 +30,6 @@
 
 #include <string.h>
 #include <stdio.h>
-#include "logger.h"
-
-/* External SD handle */
-extern SD_HandleTypeDef hsd1;
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -41,10 +37,6 @@ extern SD_HandleTypeDef hsd1;
 #define QUEUE_SIZE         (uint32_t) 10
 #define READ_CPLT_MSG      (uint32_t) 1
 #define WRITE_CPLT_MSG     (uint32_t) 2
-
-// BSP/HAL 충돌 해결을 위한 강제 설정
-#define DISABLE_SD_INIT    1
-#define FORCE_HAL_ONLY     1
 /*
 ==================================================================
 enable the defines below to send custom rtos messages
@@ -73,7 +65,7 @@ See BSP_SD_ErrorCallback() and BSP_SD_AbortCallback() below
  * BSP_SD_Init() elsewhere in the application.
  */
 /* USER CODE BEGIN disableSDInit */
-// #define DISABLE_SD_INIT - Already defined above
+#define DISABLE_SD_INIT
 /* USER CODE END disableSDInit */
 
 /*
@@ -83,7 +75,7 @@ See BSP_SD_ErrorCallback() and BSP_SD_AbortCallback() below
  * Notice: This is applicable only for cortex M7 based platform.
  */
 /* USER CODE BEGIN enableSDDmaCacheMaintenance */
-/* #define ENABLE_SD_DMA_CACHE_MAINTENANCE  1 */
+#define ENABLE_SD_DMA_CACHE_MAINTENANCE  1
 /* USER CODE END enableSDDmaCacheMaintenance */
 
 /*
@@ -92,11 +84,12 @@ See BSP_SD_ErrorCallback() and BSP_SD_AbortCallback() below
 * transfer data
 */
 /* USER CODE BEGIN enableScratchBuffer */
-/* #define ENABLE_SCRATCH_BUFFER */
+#define ENABLE_SCRATCH_BUFFER
 /* USER CODE END enableScratchBuffer */
 
 /* Private variables ---------------------------------------------------------*/
 #if defined(ENABLE_SCRATCH_BUFFER)
+#define BLOCKSIZE 512
 #if defined (ENABLE_SD_DMA_CACHE_MAINTENANCE)
 ALIGN_32BYTES(static uint8_t scratch[BLOCKSIZE]); // 32-Byte aligned for cache maintenance
 #else
@@ -166,22 +159,11 @@ static int SD_CheckStatusWithTimeout(uint32_t timeout)
 
 static DSTATUS SD_CheckStatus(BYTE lun)
 {
-  // HAL 기반 카드 상태 확인 (BSP 우회)
-  HAL_SD_CardStateTypeDef cardState = HAL_SD_GetCardState(&hsd1);
-  
-  // SD 카드 상태 확인
-  
-  if(cardState == HAL_SD_CARD_TRANSFER)
+  Stat = STA_NOINIT;
+
+  if(BSP_SD_GetCardState() == SD_TRANSFER_OK)
   {
-    // 카드가 TRANSFER 상태이면 초기화 완료로 간주
-    Stat = 0;  // 모든 에러 플래그 클리어
-    // SD 카드 준비됨
-  }
-  else
-  {
-    // 카드가 준비되지 않은 상태
-    Stat = STA_NOINIT;
-    LOG_WARN("[sd_diskio] SD card status: NOT_READY (0x%02X)", Stat);
+    Stat &= ~STA_NOINIT;
   }
 
   return Stat;
@@ -194,35 +176,26 @@ static DSTATUS SD_CheckStatus(BYTE lun)
   */
 DSTATUS SD_initialize(BYTE lun)
 {
-  LOG_INFO("[sd_diskio] SD_initialize called");
-  
-  // 초기 상태 설정
-  Stat = STA_NOINIT;
+Stat = STA_NOINIT;
 
   /*
    * check that the kernel has been started before continuing
    * as the osMessage API will fail otherwise
    */
 #if (osCMSIS <= 0x20000U)
-  int kernel_running = osKernelRunning();
-  LOG_INFO("[sd_diskio] FreeRTOS kernel running check: %d", kernel_running);
-  if(kernel_running)
+  if(osKernelRunning())
 #else
-  osKernelState_t kernel_state = osKernelGetState();
-  LOG_INFO("[sd_diskio] FreeRTOS kernel state: %d (osKernelRunning=%d)", kernel_state, osKernelRunning);
-  if(kernel_state == osKernelRunning)
+  if(osKernelGetState() == osKernelRunning)
 #endif
   {
-    LOG_INFO("[sd_diskio] FreeRTOS kernel is running - proceeding with SD check");
-    
 #if !defined(DISABLE_SD_INIT)
-    LOG_INFO("[sd_diskio] BSP_SD_Init will be called");
+
     if(BSP_SD_Init() == MSD_OK)
     {
       Stat = SD_CheckStatus(lun);
     }
+
 #else
-    LOG_INFO("[sd_diskio] DISABLE_SD_INIT is active - using HAL-based check");
     Stat = SD_CheckStatus(lun);
 #endif
 
@@ -230,45 +203,27 @@ DSTATUS SD_initialize(BYTE lun)
     * if the SD is correctly initialized, create the operation queue
     * if not already created
     */
-    LOG_INFO("[sd_diskio] Final Stat after SD_CheckStatus: 0x%02X", Stat);
 
     if (Stat != STA_NOINIT)
     {
-      LOG_INFO("[sd_diskio] SD card ready - creating message queue...");
       if (SDQueueID == NULL)
       {
  #if (osCMSIS <= 0x20000U)
-        osMessageQDef(SD_Queue, QUEUE_SIZE, uint16_t);
-        SDQueueID = osMessageCreate (osMessageQ(SD_Queue), NULL);
+      osMessageQDef(SD_Queue, QUEUE_SIZE, uint16_t);
+      SDQueueID = osMessageCreate (osMessageQ(SD_Queue), NULL);
 #else
-        SDQueueID = osMessageQueueNew(QUEUE_SIZE, 2, NULL);
+      SDQueueID = osMessageQueueNew(QUEUE_SIZE, 2, NULL);
 #endif
-        LOG_INFO("[sd_diskio] Message queue created: %p", SDQueueID);
       }
 
       if (SDQueueID == NULL)
       {
-        LOG_ERROR("[sd_diskio] Failed to create message queue");
         Stat |= STA_NOINIT;
       }
-      else
-      {
-        LOG_INFO("[sd_diskio] SD initialization completed successfully");
-      }
     }
-    else
-    {
-      LOG_WARN("[sd_diskio] SD card not ready - initialization failed");
-    }
-  }
-  else
-  {
-    LOG_ERROR("[sd_diskio] FreeRTOS kernel not running - cannot initialize SD");
   }
 
-  LOG_INFO("[sd_diskio] SD_initialize returning: 0x%02X", Stat);
   return Stat;
-
 }
 
 /**
@@ -320,22 +275,12 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
   if (!((uint32_t)buff & 0x3))
   {
 #endif
-    /* Fast path cause destination buffer is correctly aligned - using polling mode */
-    // 폴링 모드로 SD 카드 읽기
+    /* Use polling mode instead of DMA to avoid callback issues */
     ret = BSP_SD_ReadBlocks((uint32_t*)buff, (uint32_t)(sector), count, SD_TIMEOUT);
 
     if (ret == MSD_OK) {
-        // 읽기 성공
-        res = RES_OK;
-#if (ENABLE_SD_DMA_CACHE_MAINTENANCE == 1)
-        /*
-        the SCB_InvalidateDCache_by_Addr() requires a 32-Byte aligned address,
-        adjust the address and the D-Cache size to invalidate accordingly.
-        */
-        alignedAddr = (uint32_t)buff & ~0x1F;
-        SCB_InvalidateDCache_by_Addr((uint32_t*)alignedAddr, count*BLOCKSIZE + ((uint32_t)buff - alignedAddr));
-#endif
-        // 읽기 완료
+      /* Polling mode - no need for message queue */
+      res = RES_OK;
     }
 
 #if defined(ENABLE_SCRATCH_BUFFER)
@@ -350,48 +295,7 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
         ret = BSP_SD_ReadBlocks((uint32_t*)scratch, (uint32_t)sector++, 1, SD_TIMEOUT);
         if (ret == MSD_OK )
         {
-          // 폴링 모드 - 큐 대기 없이 즉시 완료 처리
-          LOG_INFO("[sd_diskio] Polling operation completed successfully");
-#if (osCMSIS < 0x20000U)
-          /* wait for a message from the queue or a timeout */
-          // 폴링 모드 - DMA 큐 대기 로직 완전 제거 (동기 방식)
-
-          // DMA 이벤트 체크 제거 - 폴링 모드에서는 불필요
-          if (1)  // 항상 실행
-          {
-            if (event.value.v == READ_CPLT_MSG)
-            {
-              timer = osKernelSysTick();
-              /* block until SDIO IP is ready or a timeout occur */
-              while(osKernelSysTick() - timer <SD_TIMEOUT)
-#else
-                // 폴링 모드 - DMA 큐 대기 로직 완전 제거 (동기 방식)
-              if ((status == osOK) && (event == READ_CPLT_MSG))
-              {
-                timer = osKernelGetTickCount();
-                /* block until SDIO IP is ready or a timeout occur */
-                ret = MSD_ERROR;
-                while(osKernelGetTickCount() - timer < SD_TIMEOUT)
-#endif
-                {
-                  ret = BSP_SD_GetCardState();
-
-                  if (ret == MSD_OK)
-                  {
-                    break;
-                  }
-                }
-
-                if (ret != MSD_OK)
-                {
-                  break;
-                }
-#if (osCMSIS < 0x20000U)
-              }
-            }
-#else
-          }
-#endif
+          /* Polling mode - operation already completed */
 #if (ENABLE_SD_DMA_CACHE_MAINTENANCE == 1)
           /*
           *
@@ -431,10 +335,17 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
 DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
 {
   DRESULT res = RES_ERROR;
-  int32_t ret;  // BSP 함수 결과 저장용
+  uint32_t timer;
+
+#if (osCMSIS < 0x20000U)
+  osEvent event;
+#else
+  uint16_t event;
+  osStatus_t status;
+#endif
 
 #if defined(ENABLE_SCRATCH_BUFFER)
-  // scratch buffer 사용 시 추가 변수들은 여기에 선언
+  int32_t ret;
 #endif
 
   /*
@@ -460,17 +371,12 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
   SCB_CleanDCache_by_Addr((uint32_t*)alignedAddr, count*BLOCKSIZE + ((uint32_t)buff - alignedAddr));
 #endif
 
-  // BSP 폴링 모드 사용 (DMA 큐 대기 제거)
-  // 폴링 모드로 SD 카드 쓰기
-  ret = BSP_SD_WriteBlocks((uint32_t*)buff, (uint32_t)sector, count, SD_TIMEOUT);
-  // 쓰기 결과 확인
-  
-  if(ret == MSD_OK)
+  if(BSP_SD_WriteBlocks((uint32_t*)buff,
+                        (uint32_t) (sector),
+                        count, SD_TIMEOUT) == MSD_OK)
   {
-    // 폴링 방식이므로 큐 대기 불필요 - 즉시 성공 처리
-    // 쓰기 완료
+    /* Polling mode - no need for message queue */
     res = RES_OK;
-    // 쓰기 성공
   }
 #if defined(ENABLE_SCRATCH_BUFFER)
   else {
@@ -491,14 +397,12 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
         ret = BSP_SD_WriteBlocks((uint32_t*)scratch, (uint32_t)sector++, 1, SD_TIMEOUT);
         if (ret == MSD_OK )
         {
-          // 폴링 모드 - 큐 대기 없이 즉시 완료 처리
-          LOG_INFO("[sd_diskio] Polling operation completed successfully");
+          /* Polling mode - operation already completed */
 #if (osCMSIS < 0x20000U)
           /* wait for a message from the queue or a timeout */
-          // 폴링 모드 - DMA 큐 대기 로직 완전 제거 (동기 방식)
+          event = osMessageGet(SDQueueID, SD_TIMEOUT);
 
-          // DMA 이벤트 체크 제거 - 폴링 모드에서는 불필요
-          if (1)  // 항상 실행
+          if (event.status == osEventMessage)
           {
             if (event.value.v == READ_CPLT_MSG)
             {
@@ -506,7 +410,7 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
               /* block until SDIO IP is ready or a timeout occur */
               while(osKernelSysTick() - timer <SD_TIMEOUT)
 #else
-                // 폴링 모드 - DMA 큐 대기 로직 완전 제거 (동기 방식)
+                status = osMessageQueueGet(SDQueueID, (void *)&event, NULL, SD_TIMEOUT);
               if ((status == osOK) && (event == READ_CPLT_MSG))
               {
                 timer = osKernelGetTickCount();

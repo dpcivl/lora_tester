@@ -1047,6 +1047,13 @@ static void MX_SDMMC1_SD_Init(void)
   {
     Error_Handler();
   }
+  
+  // BSP 초기화도 호출 (FatFs 호환성을 위해)
+  uint8_t bsp_result = BSP_SD_Init();
+  if (bsp_result != MSD_OK) {
+    // BSP 초기화 실패 시 로그만 출력 (HAL은 이미 성공했으므로 계속 진행)
+    // Error_Handler() 호출하지 않음
+  }
 
   /* USER CODE END SDMMC1_Init 2 */
 

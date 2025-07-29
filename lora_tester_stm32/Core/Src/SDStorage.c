@@ -28,10 +28,34 @@ static size_t g_current_log_size = 0;
 static bool g_directory_available = false;  // 디렉토리 사용 가능 여부
 
 #ifdef STM32F746xx
-static FIL g_log_file;
-static bool g_file_open = false;
+// 파일 닫기 보장을 위한 전역 추적 시스템
+static FIL* g_current_file_handle = NULL;  // 현재 열린 파일 핸들 추적
+static char g_current_open_file[256] = {0};  // 현재 열린 파일명 추적
 #else
 static FILE* g_log_file = NULL;
+#endif
+
+// 파일 닫기 보장 함수들
+#ifdef STM32F746xx
+static void _ensure_file_closed(void) {
+    if (g_current_file_handle != NULL) {
+        LOG_DEBUG("[SDStorage] Force closing previously opened file: %s", g_current_open_file);
+        f_close(g_current_file_handle);
+        g_current_file_handle = NULL;
+        memset(g_current_open_file, 0, sizeof(g_current_open_file));
+    }
+}
+
+static void _register_file_opened(FIL* file_handle, const char* filename) {
+    g_current_file_handle = file_handle;
+    strncpy(g_current_open_file, filename, sizeof(g_current_open_file) - 1);
+    g_current_open_file[sizeof(g_current_open_file) - 1] = '\0';
+}
+
+static void _register_file_closed(void) {
+    g_current_file_handle = NULL;
+    memset(g_current_open_file, 0, sizeof(g_current_open_file));
+}
 #endif
 
 // 내부 함수 선언
@@ -44,6 +68,9 @@ int SDStorage_Init(void)
 #ifdef STM32F746xx
     // STM32 환경: FatFs 초기화 및 진단
     LOG_INFO("[SDStorage] Starting SD card initialization...");
+    
+    // 초기화 시 파일 닫기 보장
+    _ensure_file_closed();
     
     // 1. 하드웨어 상태 진단 및 TRANSFER 상태까지 대기
     extern SD_HandleTypeDef hsd1;
@@ -233,43 +260,112 @@ int SDStorage_WriteLog(const void* data, size_t size)
     }
 
 #ifdef STM32F746xx
-    // STM32 환경: FatFs 파일 쓰기
-    if (!g_file_open) {
-        // 파일이 닫혀있는 경우에만 새로 열기 (보통 첫 번째 호출)
-        if (strlen(g_current_log_file) == 0) {
-            if (_generate_log_filename(g_current_log_file, sizeof(g_current_log_file)) != SDSTORAGE_OK) {
-                LOG_ERROR("[SDStorage] Failed to generate log filename");
-                return SDSTORAGE_ERROR;
+    // STM32 환경: 안정적인 열기-쓰기-닫기 방식
+    
+    // 로그 파일명이 없으면 생성
+    if (strlen(g_current_log_file) == 0) {
+        if (_generate_log_filename(g_current_log_file, sizeof(g_current_log_file)) != SDSTORAGE_OK) {
+            LOG_ERROR("[SDStorage] Failed to generate log filename");
+            return SDSTORAGE_ERROR;
+        }
+    }
+    
+    // SD 카드 상태 변화에 robust한 방식: 매번 열고 닫기
+    FIL temp_file;
+    memset(&temp_file, 0, sizeof(temp_file));
+    
+    // 파일 닫기 보장: 이전에 열린 파일이 있으면 강제로 닫기
+    _ensure_file_closed();
+    
+    // 성공 프로젝트 방식: 디스크 상태 먼저 확인
+    DSTATUS current_disk_stat = disk_status(0);
+    if (current_disk_stat != 0) {
+        LOG_WARN("[SDStorage] Disk not ready (%d), reinitializing...", current_disk_stat);
+        DSTATUS init_result = disk_initialize(0);
+        if (init_result != 0) {
+            LOG_ERROR("[SDStorage] Disk reinitialization failed: %d", init_result);
+            return SDSTORAGE_NOT_READY;
+        }
+    }
+    
+    // 파일 열기 (성공 프로젝트 방식: 단계적 시도)
+    FRESULT open_result = f_open(&temp_file, g_current_log_file, FA_OPEN_APPEND | FA_WRITE);
+    
+    // 파일 열기 성공 시 추적 등록
+    if (open_result == FR_OK) {
+        _register_file_opened(&temp_file, g_current_log_file);
+        LOG_DEBUG("[SDStorage] File opened and registered: %s", g_current_log_file);
+    }
+    
+    // f_open 실패 시 성공 프로젝트 방식의 복구 로직
+    if (open_result != FR_OK) {
+        LOG_WARN("[SDStorage] f_open failed (%d), trying recovery...", open_result);
+        
+        // 1단계: 마운트 재시도
+        f_mount(NULL, SDPath, 0);  // 언마운트
+        HAL_Delay(200);
+        FRESULT remount_result = f_mount(&SDFatFS, SDPath, 1);  // 강제 재마운트
+        
+        if (remount_result == FR_OK) {
+            // 재마운트 성공 후 다시 파일 열기 시도
+            open_result = f_open(&temp_file, g_current_log_file, FA_OPEN_APPEND | FA_WRITE);
+            if (open_result == FR_OK) {
+                _register_file_opened(&temp_file, g_current_log_file);
+                LOG_INFO("[SDStorage] File opened after remount recovery");
             }
         }
         
-        // FatFs f_open 시도 (파일이 없으면 생성, 있으면 덮어쓰기)
-        FRESULT open_result = f_open(&g_log_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
+        // 2단계: 여전히 실패하면 f_mkfs 시도
+        if (open_result != FR_OK) {
+            LOG_WARN("[SDStorage] File still failed, trying f_mkfs recovery...");
+            static BYTE work[4096];
+            FRESULT mkfs_result = f_mkfs(SDPath, FM_ANY, 0, work, sizeof(work));
+            
+            if (mkfs_result == FR_OK) {
+                LOG_INFO("[SDStorage] f_mkfs successful, remounting...");
+                f_mount(NULL, SDPath, 0);
+                HAL_Delay(500);
+                remount_result = f_mount(&SDFatFS, SDPath, 1);
+                
+                if (remount_result == FR_OK) {
+                    // 파일명 재생성 (mkfs 후 파일이 사라졌으므로)
+                    _generate_log_filename(g_current_log_file, sizeof(g_current_log_file));
+                    open_result = f_open(&temp_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
+                    if (open_result == FR_OK) {
+                        _register_file_opened(&temp_file, g_current_log_file);
+                        LOG_INFO("[SDStorage] File created after f_mkfs recovery");
+                    }
+                }
+            }
+        }
         
-        if (open_result == FR_OK) {
-            g_file_open = true;
-            LOG_DEBUG("[SDStorage] Log file opened for continuous logging: %s", g_current_log_file);
-        } else {
-            LOG_ERROR("[SDStorage] f_open failed: %d - SD logging disabled", open_result);
-            g_file_open = false;
+        // 모든 복구 시도 실패
+        if (open_result != FR_OK) {
+            LOG_ERROR("[SDStorage] All recovery attempts failed: %d", open_result);
             return SDSTORAGE_FILE_ERROR;
         }
     }
     
-    if (g_file_open) {
-        // FatFs 파일 쓰기 (Windows 호환) - 줄바꿈 자동 추가
-        UINT bytes_written;
+    if (open_result == FR_OK) {
+        // FA_OPEN_APPEND 사용 시 자동으로 파일 끝에 위치
         
         // 원본 데이터 쓰기
-        FRESULT write_result = f_write(&g_log_file, data, size, &bytes_written);
+        UINT bytes_written;
+        FRESULT write_result = f_write(&temp_file, data, size, &bytes_written);
         
         if (write_result == FR_OK && bytes_written == size) {
             // 줄바꿈 추가 (Windows 호환을 위해 \r\n 사용)
             UINT newline_written;
-            FRESULT newline_result = f_write(&g_log_file, "\r\n", 2, &newline_written);
+            FRESULT newline_result = f_write(&temp_file, "\r\n", 2, &newline_written);
+            
+            // 즉시 동기화 및 닫기
+            f_sync(&temp_file);
+            f_close(&temp_file);
+            _register_file_closed();  // 추적 해제
             
             if (newline_result == FR_OK) {
                 g_current_log_size += bytes_written + newline_written;
+                LOG_DEBUG("[SDStorage] Log written successfully: %d+2 bytes", bytes_written);
                 return SDSTORAGE_OK;
             } else {
                 LOG_WARN("[SDStorage] Newline write failed: %d", newline_result);
@@ -277,27 +373,29 @@ int SDStorage_WriteLog(const void* data, size_t size)
                 return SDSTORAGE_OK;  // 원본 데이터 쓰기는 성공했으므로 OK 반환
             }
         } else {
+            f_close(&temp_file);  // 실패해도 파일 닫기
+            _register_file_closed();  // 추적 해제
             if (write_result != FR_OK) {
-                LOG_ERROR("[SDStorage] f_write failed: %d - SD logging disabled", write_result);
-                g_file_open = false;
+                LOG_ERROR("[SDStorage] f_write failed: %d", write_result);
+                return SDSTORAGE_FILE_ERROR;
             } else if (bytes_written != size) {
                 LOG_WARN("[SDStorage] Partial write: %d/%d bytes", bytes_written, size);
                 return SDSTORAGE_DISK_FULL;
             }
         }
-    }
-    
-    if (!g_file_open) {
-        // FatFs 파일이 열리지 않은 경우 - 에러 반환
-        LOG_ERROR("[SDStorage] File not open and FatFs f_open failed");
-        LOG_ERROR("[SDStorage] Cannot write log data - SD logging unavailable");
+    } else {
+        LOG_ERROR("[SDStorage] f_open failed: %d - SD card state may have changed", open_result);
+        
+        // SD 카드 상태 재확인
+        DSTATUS current_status = disk_status(0);
+        LOG_WARN("[SDStorage] Current disk status: 0x%02X", current_status);
+        
+        if (current_status != 0) {
+            LOG_WARN("[SDStorage] SD card not ready - temporarily disabling SD logging");
+            return SDSTORAGE_NOT_READY;
+        }
+        
         return SDSTORAGE_FILE_ERROR;
-    }
-    
-    // 즉시 플러시하여 데이터 안정성 확보
-    FRESULT sync_result = f_sync(&g_log_file);
-    if (sync_result != FR_OK) {
-        LOG_WARN("[SDStorage] f_sync failed: %d", sync_result);
     }
 #else
     // PC/테스트 환경: 파일 I/O 시뮬레이션 (항상 성공)
@@ -317,10 +415,8 @@ void SDStorage_Disconnect(void)
 {
     if (g_sd_ready) {
 #ifdef STM32F746xx
-        if (g_file_open) {
-            f_close(&g_log_file);
-            g_file_open = false;
-        }
+        // 파일 닫기 보장 후 마운트 해제
+        _ensure_file_closed();
         f_mount(NULL, SDPath, 0);
 #else
         if (g_log_file != NULL) {
@@ -341,38 +437,27 @@ int SDStorage_CreateNewLogFile(void)
         return SDSTORAGE_NOT_READY;
     }
     
-    // 이전 파일이 열려있다면 닫기
-#ifdef STM32F746xx
-    if (g_file_open) {
-        f_close(&g_log_file);
-        g_file_open = false;
-    }
-#else
-    if (g_log_file != NULL) {
-        fclose(g_log_file);
-        g_log_file = NULL;
-    }
-#endif
+    // 전역 파일 객체 제거됨 - 별도 처리 불필요
     
     // 새 파일명 생성
     if (_generate_log_filename(g_current_log_file, sizeof(g_current_log_file)) != SDSTORAGE_OK) {
         return SDSTORAGE_ERROR;
     }
     
-    // 파일 생성 확인 (SD 쓰기 문제로 인한 블로킹 방지)
+    // 파일 생성 테스트 (간단한 방식)
 #ifdef STM32F746xx
-    LOG_INFO("[SDStorage] Attempting to create log file: %s", g_current_log_file);
+    LOG_INFO("[SDStorage] Testing file creation: %s", g_current_log_file);
     
-    // FatFs 파일 객체 초기화
-    memset(&g_log_file, 0, sizeof(g_log_file));
+    // 지역 변수로 파일 객체 생성
+    FIL test_file;
+    memset(&test_file, 0, sizeof(test_file));
     
     // SD 카드 상태 재확인
     DSTATUS current_disk_status = disk_status(0);
     LOG_INFO("[SDStorage] Current disk status: 0x%02X", current_disk_status);
     
-    // 실제 파일 생성 시도 (에러 상세 분석)
-    LOG_INFO("[SDStorage] Attempting to create new log file: %s", g_current_log_file);
-    FRESULT open_result = f_open(&g_log_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
+    // 파일 생성 테스트
+    FRESULT open_result = f_open(&test_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
     LOG_INFO("[SDStorage] f_open result: %d", open_result);
     
     if (open_result != FR_OK) {
@@ -399,9 +484,9 @@ int SDStorage_CreateNewLogFile(void)
         return SDSTORAGE_FILE_ERROR;
     }
     
-    LOG_INFO("[SDStorage] File created successfully, keeping open for logging");
-    g_file_open = true;  // 파일을 열어둔 상태로 유지
-    LOG_INFO("[SDStorage] File ready for immediate logging");
+    // 파일 생성 확인 후 즉시 닫기 (추적 등록 없이)
+    f_close(&test_file);
+    LOG_INFO("[SDStorage] File created and ready for logging: %s", g_current_log_file);
 #else
     // PC/테스트 환경: 파일 생성 시뮬레이션 (항상 성공)
     LOG_INFO("[SDStorage] Test environment - file creation simulated");
