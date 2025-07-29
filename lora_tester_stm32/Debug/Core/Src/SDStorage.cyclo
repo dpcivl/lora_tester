@@ -3,7 +3,7 @@
 ../Core/Src/SDStorage.c:217:5:SDStorage_WriteLog	19
 ../Core/Src/SDStorage.c:311:6:SDStorage_IsReady	1
 ../Core/Src/SDStorage.c:316:6:SDStorage_Disconnect	3
-../Core/Src/SDStorage.c:338:5:SDStorage_CreateNewLogFile	5
-../Core/Src/SDStorage.c:390:8:SDStorage_GetCurrentLogSize	1
-../Core/Src/SDStorage.c:396:12:_create_log_directory	4
-../Core/Src/SDStorage.c:434:12:_generate_log_filename	8
+../Core/Src/SDStorage.c:338:5:SDStorage_CreateNewLogFile	9
+../Core/Src/SDStorage.c:414:8:SDStorage_GetCurrentLogSize	1
+../Core/Src/SDStorage.c:420:12:_create_log_directory	4
+../Core/Src/SDStorage.c:458:12:_generate_log_filename	8

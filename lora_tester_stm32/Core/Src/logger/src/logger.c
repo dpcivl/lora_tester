@@ -7,7 +7,7 @@
 
 
 #include "logger.h"
-#include "../Network.h"
+#include "../SDStorage.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -52,9 +52,9 @@ LoggerStatus LOGGER_Send(const char* message) {
             return LOGGER_Platform_Send(message);
             
         case LOGGER_MODE_SD_ONLY:
-            if (Network_IsConnected()) {
-                int result = Network_SendBinary(message, strlen(message) + 1);
-                return (result == NETWORK_OK) ? LOGGER_STATUS_OK : LOGGER_STATUS_ERROR;
+            if (SDStorage_IsReady()) {
+                int result = SDStorage_WriteLog(message, strlen(message));
+                return (result == SDSTORAGE_OK) ? LOGGER_STATUS_OK : LOGGER_STATUS_ERROR;
             }
             return LOGGER_STATUS_ERROR;
             
@@ -62,8 +62,8 @@ LoggerStatus LOGGER_Send(const char* message) {
             // 터미널 우선 출력
             LOGGER_Platform_Send(message);
             // SD 출력 (실패해도 무시)
-            if (Network_IsConnected()) {
-                Network_SendBinary(message, strlen(message) + 1);
+            if (SDStorage_IsReady()) {
+                SDStorage_WriteLog(message, strlen(message));
             }
             return LOGGER_STATUS_OK;
             
@@ -96,8 +96,8 @@ void LOGGER_SetMode(LoggerMode_t mode) {
     if (mode == LOGGER_MODE_TERMINAL_ONLY) {
         logger_connected = true;  // 터미널은 항상 연결됨
     } else if (mode == LOGGER_MODE_SD_ONLY || mode == LOGGER_MODE_DUAL) {
-        // SD 백엔드 사용 시 Network 연결 상태에 따라 결정
-        logger_connected = Network_IsConnected();
+        // SD 백엔드 사용 시 SDStorage 연결 상태에 따라 결정
+        logger_connected = SDStorage_IsReady();
     }
 }
 
@@ -129,8 +129,8 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
             break;
             
         case LOGGER_MODE_SD_ONLY:
-            if (Network_IsConnected()) {
-                Network_SendBinary(buffer, strlen(buffer) + 1);
+            if (SDStorage_IsReady()) {
+                SDStorage_WriteLog(buffer, strlen(buffer));
             }
             break;
             
@@ -138,8 +138,8 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
             // 터미널 출력 (실시간)
             LOGGER_Platform_Send(buffer);
             // SD 출력 (에러 무시)
-            if (Network_IsConnected()) {
-                Network_SendBinary(buffer, strlen(buffer) + 1);
+            if (SDStorage_IsReady()) {
+                SDStorage_WriteLog(buffer, strlen(buffer));
             }
             break;
     }

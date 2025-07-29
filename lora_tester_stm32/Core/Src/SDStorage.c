@@ -363,13 +363,37 @@ int SDStorage_CreateNewLogFile(void)
 #ifdef STM32F746xx
     LOG_INFO("[SDStorage] Attempting to create log file: %s", g_current_log_file);
     
-    // 실제 파일 생성 시도 (test.txt와 동일한 플래그 사용)
+    // FatFs 파일 객체 초기화
+    memset(&g_log_file, 0, sizeof(g_log_file));
+    
+    // SD 카드 상태 재확인
+    DSTATUS current_disk_status = disk_status(0);
+    LOG_INFO("[SDStorage] Current disk status: 0x%02X", current_disk_status);
+    
+    // 실제 파일 생성 시도 (에러 상세 분석)
     LOG_INFO("[SDStorage] Attempting to create new log file: %s", g_current_log_file);
     FRESULT open_result = f_open(&g_log_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
     LOG_INFO("[SDStorage] f_open result: %d", open_result);
     
     if (open_result != FR_OK) {
-        LOG_ERROR("[SDStorage] f_open failed: %d - SD write problem detected", open_result);
+        LOG_ERROR("[SDStorage] f_open failed: %d", open_result);
+        
+        // 상세 에러 분석
+        switch (open_result) {
+            case 16: // FR_INVALID_OBJECT
+                LOG_ERROR("[SDStorage] FR_INVALID_OBJECT - File object initialization issue");
+                break;
+            case 9: // FR_WRITE_PROTECTED  
+                LOG_ERROR("[SDStorage] FR_WRITE_PROTECTED - SD card is write protected");
+                break;
+            case 3: // FR_NOT_READY
+                LOG_ERROR("[SDStorage] FR_NOT_READY - Disk not ready");
+                break;
+            default:
+                LOG_ERROR("[SDStorage] Unknown f_open error: %d", open_result);
+                break;
+        }
+        
         LOG_WARN("[SDStorage] Disabling SD logging due to file creation failure");
         g_sd_ready = false;  // SD 로깅 비활성화
         return SDSTORAGE_FILE_ERROR;
