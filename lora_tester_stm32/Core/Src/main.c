@@ -1849,11 +1849,13 @@ void StartDefaultTask(void const * argument)
     LOG_INFO("📺 LoRa logs will be displayed on terminal only (SD not available)");
   }
   
-  // LoRa 로깅 모드 설정 (터미널에서 모든 로그를 보기 위해 INFO 레벨 유지)
+  // LoRa 로깅 모드 설정 - 초기화 단계에서는 터미널만 사용
   if (g_sd_initialization_result == SDSTORAGE_OK) {
     LOGGER_SetMode(LOGGER_MODE_DUAL);  // 터미널 + SD 동시 출력
     LOGGER_SetFilterLevel(LOG_LEVEL_INFO);  // 터미널에서 모든 로그 확인 가능
-    LOG_WARN("✅ LoRa logging mode: DUAL (Terminal + SD), INFO level for debugging");
+    LOGGER_SetSDFilterLevel(LOG_LEVEL_WARN);  // SD 카드에는 WARN 이상만 저장
+    LOGGER_EnableSDLogging(false);  // 초기화 완료 전까지 SD 로깅 비활성화
+    LOG_WARN("✅ LoRa logging mode: DUAL (Terminal + SD), SD logging will start from JOIN attempts");
   } else {
     LOGGER_SetMode(LOGGER_MODE_TERMINAL_ONLY);
     LOGGER_SetFilterLevel(LOG_LEVEL_INFO);
@@ -1904,8 +1906,15 @@ void StartDefaultTask(void const * argument)
         osDelay(2000); // OK 응답 대기 중 2초 간격
         break;
       case LORA_STATE_SEND_JOIN:
+        // JOIN 시도 시작 - SD 로깅 활성화
+        if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
+          LOGGER_EnableSDLogging(true);
+          LOG_WARN("🗂️ SD logging enabled from JOIN attempts (WARN+ levels only)");
+        }
+        osDelay(2000); // JOIN 명령어 전송 후 2초 대기
+        break;
       case LORA_STATE_SEND_PERIODIC:
-        osDelay(2000); // JOIN/SEND 명령어 전송 후 2초 대기
+        osDelay(2000); // SEND 명령어 전송 후 2초 대기
         break;
       case LORA_STATE_WAIT_JOIN_OK:
       case LORA_STATE_WAIT_SEND_RESPONSE:

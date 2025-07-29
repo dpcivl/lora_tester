@@ -58,6 +58,9 @@ typedef enum {
 
 // Logger 제어 함수 추가
 void LOGGER_SetFilterLevel(LogLevel min_level);
+void LOGGER_SetSDFilterLevel(LogLevel min_level);
+void LOGGER_EnableSDLogging(bool enable);
+bool LOGGER_IsSDLoggingEnabled(void);
 void LOGGER_SetMode(LoggerMode_t mode);
 LoggerMode_t LOGGER_GetMode(void);
 void LOGGER_SendFormatted(LogLevel level, const char* format, ...);

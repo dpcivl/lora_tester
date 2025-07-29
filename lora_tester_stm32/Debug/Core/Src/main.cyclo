@@ -25,10 +25,10 @@
 ../Core/Src/main.c:1524:13:MX_USART6_UART_Init	2
 ../Core/Src/main.c:1555:13:MX_FMC_Init	2
 ../Core/Src/main.c:1606:13:MX_GPIO_Init	1
-../Core/Src/main.c:1777:6:StartDefaultTask	21
-../Core/Src/main.c:1954:6:StartSDLoggingTask	9
-../Core/Src/main.c:2061:6:StartReceiveTask	15
-../Core/Src/main.c:2157:6:HAL_TIM_PeriodElapsedCallback	2
-../Core/Src/main.c:2175:6:Error_Handler	1
-../Core/Src/main.c:2208:13:MX_DMA_Init	1
-../Core/Src/main.c:2228:6:MX_USART6_DMA_Init	3
+../Core/Src/main.c:1777:6:StartDefaultTask	24
+../Core/Src/main.c:1963:6:StartSDLoggingTask	9
+../Core/Src/main.c:2070:6:StartReceiveTask	15
+../Core/Src/main.c:2166:6:HAL_TIM_PeriodElapsedCallback	2
+../Core/Src/main.c:2184:6:Error_Handler	1
+../Core/Src/main.c:2217:13:MX_DMA_Init	1
+../Core/Src/main.c:2237:6:MX_USART6_DMA_Init	3

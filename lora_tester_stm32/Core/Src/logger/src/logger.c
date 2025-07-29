@@ -15,6 +15,8 @@
 static bool logger_connected = false;
 static LoggerMode_t current_mode = LOGGER_MODE_TERMINAL_ONLY;
 static LogLevel filter_level = LOG_LEVEL_DEBUG;  // 기본적으로 모든 레벨 허용
+static LogLevel sd_filter_level = LOG_LEVEL_WARN;  // SD 카드는 WARN 이상만 저장
+static bool sd_logging_enabled = false;  // JOIN 시도 전까지는 SD 로깅 비활성화
 static LoggerConfig current_config = {
     .level = LOG_LEVEL_INFO,
     .enable_timestamp = false,
@@ -52,7 +54,8 @@ LoggerStatus LOGGER_Send(const char* message) {
             return LOGGER_Platform_Send(message);
             
         case LOGGER_MODE_SD_ONLY:
-            if (SDStorage_IsReady()) {
+            // SD 로깅이 활성화된 경우에만 저장
+            if (sd_logging_enabled && SDStorage_IsReady()) {
                 int result = SDStorage_WriteLog(message, strlen(message));
                 return (result == SDSTORAGE_OK) ? LOGGER_STATUS_OK : LOGGER_STATUS_ERROR;
             }
@@ -61,8 +64,8 @@ LoggerStatus LOGGER_Send(const char* message) {
         case LOGGER_MODE_DUAL:
             // 터미널 우선 출력
             LOGGER_Platform_Send(message);
-            // SD 출력 (실패해도 무시)
-            if (SDStorage_IsReady()) {
+            // SD 출력 (SD 로깅 활성화 + 실패해도 무시)
+            if (sd_logging_enabled && SDStorage_IsReady()) {
                 SDStorage_WriteLog(message, strlen(message));
             }
             return LOGGER_STATUS_OK;
@@ -87,6 +90,18 @@ bool LOGGER_IsConnected(void) {
 // Logger 제어 함수들
 void LOGGER_SetFilterLevel(LogLevel min_level) {
     filter_level = min_level;
+}
+
+void LOGGER_SetSDFilterLevel(LogLevel min_level) {
+    sd_filter_level = min_level;
+}
+
+void LOGGER_EnableSDLogging(bool enable) {
+    sd_logging_enabled = enable;
+}
+
+bool LOGGER_IsSDLoggingEnabled(void) {
+    return sd_logging_enabled;
 }
 
 void LOGGER_SetMode(LoggerMode_t mode) {
@@ -129,7 +144,8 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
             break;
             
         case LOGGER_MODE_SD_ONLY:
-            if (SDStorage_IsReady()) {
+            // SD 로깅 활성화 + SD 필터 레벨 체크
+            if (sd_logging_enabled && level >= sd_filter_level && SDStorage_IsReady()) {
                 SDStorage_WriteLog(buffer, strlen(buffer));
             }
             break;
@@ -137,8 +153,8 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
         case LOGGER_MODE_DUAL:
             // 터미널 출력 (실시간)
             LOGGER_Platform_Send(buffer);
-            // SD 출력 (에러 무시)
-            if (SDStorage_IsReady()) {
+            // SD 출력 (SD 로깅 활성화 + SD 필터 레벨 체크 + 에러 무시)
+            if (sd_logging_enabled && level >= sd_filter_level && SDStorage_IsReady()) {
                 SDStorage_WriteLog(buffer, strlen(buffer));
             }
             break;

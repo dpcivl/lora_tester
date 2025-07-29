@@ -63,6 +63,7 @@ bool is_join_response_ok(const char* response)
     
     if (result) {
         LOG_WARN("[ResponseHandler] ✅ JOIN SUCCESS: %s", response);
+        LOG_WARN("[LoRa] 🌐 Network joined successfully - SD logging active");
     } else {
         LOG_DEBUG("[ResponseHandler] Not a JOIN response: '%s'", response);
     }
