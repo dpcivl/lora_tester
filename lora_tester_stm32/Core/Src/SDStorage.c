@@ -25,6 +25,7 @@ extern SD_HandleTypeDef hsd1;  // SD 핸들 선언 추가
 static bool g_sd_ready = false;
 static char g_current_log_file[256] = {0};
 static size_t g_current_log_size = 0;
+static bool g_directory_available = false;  // 디렉토리 사용 가능 여부
 
 #ifdef STM32F746xx
 static FIL g_log_file;
@@ -44,10 +45,43 @@ int SDStorage_Init(void)
     // STM32 환경: FatFs 초기화 및 진단
     LOG_INFO("[SDStorage] Starting SD card initialization...");
     
-    // 1. 하드웨어 상태 진단
+    // 1. 하드웨어 상태 진단 및 TRANSFER 상태까지 대기
     extern SD_HandleTypeDef hsd1;
     HAL_SD_CardStateTypeDef card_state = HAL_SD_GetCardState(&hsd1);
-    LOG_INFO("[SDStorage] HAL SD card state: %d", card_state);
+    LOG_INFO("[SDStorage] Initial SD card state: %d", card_state);
+    
+    // SD 카드가 TRANSFER 상태가 될 때까지 대기 (성공 프로젝트 패턴)
+    int wait_count = 0;
+    while (card_state != HAL_SD_CARD_TRANSFER && wait_count < 50) {  // 최대 5초 대기
+        LOG_INFO("[SDStorage] Waiting for SD card TRANSFER state... (attempt %d)", wait_count + 1);
+        HAL_Delay(100);
+        card_state = HAL_SD_GetCardState(&hsd1);
+        wait_count++;
+    }
+    
+    if (card_state == HAL_SD_CARD_TRANSFER) {
+        LOG_INFO("[SDStorage] ✅ SD card reached TRANSFER state successfully");
+        
+        // SDMMC 에러 코드 상세 체크 (성공 프로젝트 패턴)
+        if (hsd1.ErrorCode != HAL_SD_ERROR_NONE) {
+            LOG_WARN("[SDStorage] SDMMC ErrorCode detected: 0x%08X", hsd1.ErrorCode);
+            
+            if (hsd1.ErrorCode & SDMMC_ERROR_TX_UNDERRUN) {
+                LOG_WARN("[SDStorage] TX_UNDERRUN detected - clock may be too fast");
+            }
+            if (hsd1.ErrorCode & SDMMC_ERROR_DATA_CRC_FAIL) {
+                LOG_WARN("[SDStorage] CRC_FAIL detected - cache issue possible");
+                SCB_CleanInvalidateDCache();
+            }
+            
+            // 에러 코드 클리어
+            hsd1.ErrorCode = HAL_SD_ERROR_NONE;
+        }
+    } else {
+        LOG_ERROR("[SDStorage] ❌ SD card failed to reach TRANSFER state (state: %d)", card_state);
+        LOG_ERROR("[SDStorage] SDMMC ErrorCode: 0x%08X", hsd1.ErrorCode);
+        return SDSTORAGE_ERROR;
+    }
     
     DSTATUS disk_status = disk_initialize(0);
     LOG_INFO("[SDStorage] disk_initialize result: 0x%02X", disk_status);
@@ -62,9 +96,10 @@ int SDStorage_Init(void)
     // 2. 파일시스템 마운트 시도 (지연 마운트로 변경 - 블로킹 방지)
     LOG_INFO("[SDStorage] Using deferred mount (flag=0) to avoid blocking...");
     
-    // f_mount 호출 전에 약간의 지연 (SD 카드 안정화)
+    // f_mount 호출 전에 충분한 지연 (SD 카드 안정화)
     #ifdef STM32F746xx
-    HAL_Delay(100);
+    LOG_INFO("[SDStorage] Waiting for SD card stabilization (500ms)...");
+    HAL_Delay(500);
     #endif
     
     // f_mount 블로킹 문제 - 완전 우회 시도
@@ -72,9 +107,28 @@ int SDStorage_Init(void)
     LOG_INFO("[SDStorage] Attempting direct file operations without f_mount...");
     LOG_INFO("[SDStorage] Some FatFs implementations support auto-mount on first file access");
     
-    // f_mount를 우회하고 직접 파일 작업 시도
-    FRESULT mount_result = FR_OK;  // f_mount 생략
-    LOG_INFO("[SDStorage] f_mount bypassed - proceeding to direct file test");
+    // f_mount 여러 번 재시도 (성공 프로젝트 패턴)
+    LOG_INFO("[SDStorage] Attempting f_mount with retry logic...");
+    FRESULT mount_result = FR_DISK_ERR;  // 초기값
+    
+    for (int retry = 0; retry < 3; retry++) {
+        LOG_INFO("[SDStorage] f_mount attempt %d/3...", retry + 1);
+        mount_result = f_mount(&SDFatFS, SDPath, 1);  // 즉시 마운트
+        LOG_INFO("[SDStorage] f_mount result: %d", mount_result);
+        
+        if (mount_result == FR_OK) {
+            LOG_INFO("[SDStorage] ✅ f_mount successful on attempt %d", retry + 1);
+            break;
+        } else {
+            LOG_WARN("[SDStorage] f_mount failed on attempt %d, retrying in 1000ms...", retry + 1);
+            if (retry < 2) {  // 마지막 시도가 아니면 대기
+                // STM32F7 D-Cache 클리어 (성공 프로젝트 패턴)
+                LOG_INFO("[SDStorage] Clearing D-Cache for STM32F7 compatibility...");
+                SCB_CleanInvalidateDCache();
+                HAL_Delay(1000);
+            }
+        }
+    }
     
     // 즉시 마운트 성공 시 쓰기 준비 완료
     if (mount_result == FR_OK) {
@@ -107,17 +161,16 @@ int SDStorage_Init(void)
             // 작업 버퍼 할당 (전역 또는 스택)
             static BYTE work[_MAX_SS];
             
-            // f_mkfs 무한 루프 방지를 위해 임시 비활성화
-            LOG_WARN("[SDStorage] f_mkfs temporarily disabled due to infinite loop issue");
-            LOG_INFO("[SDStorage] Skipping filesystem creation to avoid system hang");
-            FRESULT mkfs_result = FR_DISK_ERR;  // 강제 실패 처리
-            LOG_INFO("[SDStorage] f_mkfs(skipped) result: %d", mkfs_result);
+            // 실제 f_mkfs 시도
+            LOG_INFO("[SDStorage] Attempting to create filesystem with f_mkfs...");
+            FRESULT mkfs_result = f_mkfs(SDPath, FM_ANY, 0, work, sizeof(work));
+            LOG_INFO("[SDStorage] f_mkfs(FM_ANY) result: %d", mkfs_result);
             
             if (mkfs_result != FR_OK) {
-                // FAT32 강제 생성도 무한 루프 방지를 위해 비활성화
-                LOG_WARN("[SDStorage] f_mkfs(FM_FAT32) also disabled due to infinite loop issue");
-                mkfs_result = FR_DISK_ERR;  // 강제 실패 처리
-                LOG_INFO("[SDStorage] f_mkfs(FM_FAT32, skipped) result: %d", mkfs_result);
+                // FAT32로 다시 시도
+                LOG_INFO("[SDStorage] Retrying with explicit FAT32 format...");
+                mkfs_result = f_mkfs(SDPath, FM_FAT32, 4096, work, sizeof(work));
+                LOG_INFO("[SDStorage] f_mkfs(FM_FAT32) result: %d", mkfs_result);
                 
                 if (mkfs_result != FR_OK) {
                     LOG_ERROR("[SDStorage] File system creation failed: %d", mkfs_result);
@@ -146,37 +199,12 @@ int SDStorage_Init(void)
     LOG_INFO("[SDStorage] Test environment - simulating successful initialization");
 #endif
 
-    // f_mount 우회 후 직접 파일 테스트
-    LOG_INFO("[SDStorage] Testing direct file operations without f_mount...");
+    // FatFs 마운트 성공 확인됨
     
-    // 간단한 테스트 파일 생성 시도
-    FIL test_file;
-    LOG_INFO("[SDStorage] Attempting direct f_open for test file...");
-    FRESULT test_result = f_open(&test_file, "test.txt", FA_CREATE_ALWAYS | FA_WRITE);
-    LOG_INFO("[SDStorage] f_open result: %d", test_result);
-    
-    if (test_result == FR_OK) {
-        LOG_INFO("[SDStorage] ✅ Direct f_open SUCCESS - FatFs working without f_mount!");
-        
-        // 테스트 데이터 쓰기
-        const char* test_data = "FatFs Direct File Test\n";
-        UINT bytes_written;
-        FRESULT write_result = f_write(&test_file, test_data, strlen(test_data), &bytes_written);
-        LOG_INFO("[SDStorage] f_write result: %d, bytes: %d", write_result, bytes_written);
-        
-        f_close(&test_file);
-        LOG_INFO("[SDStorage] Test file closed successfully");
-        
-        if (write_result == FR_OK && bytes_written > 0) {
-            LOG_INFO("[SDStorage] ✅ BREAKTHROUGH: SD card FatFs working via direct file access!");
-        }
-    } else {
-        LOG_ERROR("[SDStorage] f_open failed: %d - testing fallback methods", test_result);
-    }
-    
-    // 디렉토리 생성 건너뛰기 (테스트 목적)
-    LOG_INFO("[SDStorage] Skipping directory creation for direct file test");
-    int dir_result = SDSTORAGE_OK;  // 강제 성공 처리
+    // 디렉토리 생성 시도
+    LOG_INFO("[SDStorage] Creating log directory...");
+    int dir_result = _create_log_directory();
+    g_directory_available = (dir_result == SDSTORAGE_OK);
     
     g_sd_ready = true;
     g_current_log_size = 0;
@@ -219,21 +247,10 @@ int SDStorage_WriteLog(const void* data, size_t size)
         strcpy(g_current_log_file, "log.txt");
         LOG_INFO("[SDStorage] Using simple filename: %s", g_current_log_file);
         
-        // FatFs 블로킹 문제로 인해 타임아웃 기반 접근 시도
-        LOG_WARN("[SDStorage] FatFs operations are blocking - switching to HAL direct write");
-        LOG_INFO("[SDStorage] This will preserve data but files won't be visible in Windows");
+        // FatFs f_open 시도
+        LOG_INFO("[SDStorage] Attempting FatFs f_open for Windows-compatible logging");
         
-        g_file_open = false;  // FatFs 모드 비활성화
-        
-        // 사용자에게 명확한 상황 설명
-        LOG_WARN("[SDStorage] === SD CARD LOGGING STATUS ===");
-        LOG_WARN("[SDStorage] - Data WILL be saved to SD card");  
-        LOG_WARN("[SDStorage] - Files will NOT be visible in Windows");
-        LOG_WARN("[SDStorage] - This is due to FatFs software blocking issue");
-        LOG_WARN("[SDStorage] - SD hardware is working perfectly");
-        LOG_WARN("[SDStorage] ===============================");
-        
-        // 실제 f_open 시도 (CREATE_ALWAYS로 덮어쓰기 허용)
+        // 실제 f_open 시도 (test.txt와 동일한 방식)
         FRESULT open_result = f_open(&g_log_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
         LOG_INFO("[SDStorage] f_open result: %d", open_result);
         
@@ -241,12 +258,8 @@ int SDStorage_WriteLog(const void* data, size_t size)
             g_file_open = true;
             LOG_INFO("[SDStorage] File opened successfully for writing");
         } else {
-            LOG_ERROR("[SDStorage] f_open failed: %d - using HAL direct write fallback", open_result);
-            
-            // FatFs 실패 시 HAL 직접 쓰기 모드로 폴백
-            LOG_WARN("[SDStorage] Falling back to HAL direct write (bypassing FatFs)");
+            LOG_ERROR("[SDStorage] f_open failed: %d - SD logging will be disabled", open_result);
             g_file_open = false;  // FatFs 모드 비활성화
-            LOG_INFO("[SDStorage] Will use HAL_SD_WriteBlocks directly");
         }
     }
     
@@ -259,8 +272,8 @@ int SDStorage_WriteLog(const void* data, size_t size)
         LOG_INFO("[SDStorage] f_write result: %d, bytes_written: %d", write_result, bytes_written);
         
         if (write_result != FR_OK) {
-            LOG_ERROR("[SDStorage] f_write failed: %d - switching to HAL direct write", write_result);
-            g_file_open = false;  // FatFs 모드 비활성화하고 HAL 모드로 전환
+            LOG_ERROR("[SDStorage] f_write failed: %d - SD logging disabled", write_result);
+            g_file_open = false;  // FatFs 모드 비활성화
         } else if (bytes_written != size) {
             LOG_WARN("[SDStorage] Partial write: %d/%d bytes", bytes_written, size);
             return SDSTORAGE_DISK_FULL;
@@ -273,28 +286,10 @@ int SDStorage_WriteLog(const void* data, size_t size)
     }
     
     if (!g_file_open) {
-        // HAL 직접 쓰기 모드 (FatFs 우회)
-        LOG_INFO("[SDStorage] Using HAL direct write (bypassing FatFs)");
-        
-        // SD 카드에 직접 섹터 쓰기 (512바이트 단위)
-        uint32_t sector_start = 1000;  // 임의의 안전한 섹터 위치
-        // uint32_t sectors_needed = (size + 511) / 512;  // 올림 계산 - unused variable removed
-        
-        // 512바이트 단위로 패딩된 버퍼 생성
-        uint8_t sector_buffer[512] = {0};
-        memcpy(sector_buffer, data, (size > 512) ? 512 : size);
-        
-        HAL_StatusTypeDef hal_result = HAL_SD_WriteBlocks(&hsd1, sector_buffer, sector_start, 1, 5000);
-        LOG_INFO("[SDStorage] HAL_SD_WriteBlocks result: %d", hal_result);
-        
-        if (hal_result == HAL_OK) {
-            LOG_INFO("[SDStorage] HAL direct write successful");
-            g_current_log_size += size;
-            return SDSTORAGE_OK;
-        } else {
-            LOG_ERROR("[SDStorage] HAL direct write failed: %d", hal_result);
-            return SDSTORAGE_FILE_ERROR;  // SDSTORAGE_DISK_ERROR 대신 FILE_ERROR 사용
-        }
+        // FatFs 파일이 열리지 않은 경우 - 에러 반환
+        LOG_ERROR("[SDStorage] File not open and FatFs f_open failed");
+        LOG_ERROR("[SDStorage] Cannot write log data - SD logging unavailable");
+        return SDSTORAGE_FILE_ERROR;
     }
     
     // 즉시 플러시하여 데이터 안정성 확보
@@ -365,13 +360,10 @@ int SDStorage_CreateNewLogFile(void)
 #ifdef STM32F746xx
     LOG_INFO("[SDStorage] Attempting to create log file: %s", g_current_log_file);
     
-    // f_open 블로킹 문제로 인해 파일 생성 건너뛰기
-    LOG_WARN("[SDStorage] Skipping f_open due to known blocking issue");
-    LOG_INFO("[SDStorage] Will attempt direct write operations instead");
-    
-    // 파일명만 설정하고 실제 생성은 WriteLog에서 수행
-    FRESULT open_result = FR_OK;  // 강제로 성공 처리
-    LOG_INFO("[SDStorage] File creation bypassed - proceeding with direct write mode");
+    // 실제 파일 생성 시도 (test.txt와 동일한 플래그 사용)
+    LOG_INFO("[SDStorage] Attempting to create new log file: %s", g_current_log_file);
+    FRESULT open_result = f_open(&g_log_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
+    LOG_INFO("[SDStorage] f_open result: %d", open_result);
     
     if (open_result != FR_OK) {
         LOG_ERROR("[SDStorage] f_open failed: %d - SD write problem detected", open_result);
@@ -402,67 +394,33 @@ size_t SDStorage_GetCurrentLogSize(void)
 static int _create_log_directory(void)
 {
 #ifdef STM32F746xx
-    // STM32: SD카드 저수준 테스트 먼저 수행
-    LOG_INFO("[SDStorage] Testing SD card at HAL level before f_mkdir...");
+    // FatFs가 이미 정상 동작하므로 HAL 테스트 불필요
     
-    extern SD_HandleTypeDef hsd1;
+    // f_mkdir 전에 볼륨 상태 재확인 (에러 6 방지)
+    LOG_INFO("[SDStorage] Verifying volume state before f_mkdir...");
     
-    // 1. SD카드 읽기 테스트 (섹터 0 읽기)
-    static uint8_t read_buffer[512];
-    HAL_StatusTypeDef read_result = HAL_SD_ReadBlocks(&hsd1, read_buffer, 0, 1, 5000);
-    LOG_INFO("[SDStorage] HAL_SD_ReadBlocks result: %d", read_result);
+    // 볼륨 재마운트 시도 (상태 안정화)
+    FRESULT remount_result = f_mount(&SDFatFS, SDPath, 1);
+    LOG_INFO("[SDStorage] Volume re-mount result: %d", remount_result);
     
-    if (read_result != HAL_OK) {
-        LOG_ERROR("[SDStorage] SD card read test failed - hardware problem");
-        return SDSTORAGE_ERROR;
+    FRESULT mkdir_result = FR_NOT_ENABLED;  // 초기값 설정
+    
+    if (remount_result == FR_OK) {
+        LOG_INFO("[SDStorage] Volume ready - attempting f_mkdir...");
+        mkdir_result = f_mkdir("lora_logs");
+        LOG_INFO("[SDStorage] f_mkdir result: %d", mkdir_result);
+    } else {
+        LOG_ERROR("[SDStorage] Volume re-mount failed: %d", remount_result);
     }
-    
-    // 2. SD카드 쓰기 테스트 (임시 섹터에 쓰기)
-    static uint8_t write_buffer[512];
-    memset(write_buffer, 0xAA, 512);  // 테스트 패턴
-    
-    LOG_INFO("[SDStorage] Testing SD card write capability...");
-    HAL_StatusTypeDef write_result = HAL_SD_WriteBlocks(&hsd1, write_buffer, 1000, 1, 5000);
-    LOG_INFO("[SDStorage] HAL_SD_WriteBlocks result: %d", write_result);
-    
-    if (write_result != HAL_OK) {
-        LOG_ERROR("[SDStorage] SD card write test failed - card may be write-protected or damaged");
-        return SDSTORAGE_ERROR;
-    }
-    
-    // 3. 쓰기 검증 (방금 쓴 데이터 읽기)
-    static uint8_t verify_buffer[512];
-    HAL_StatusTypeDef verify_result = HAL_SD_ReadBlocks(&hsd1, verify_buffer, 1000, 1, 5000);
-    LOG_INFO("[SDStorage] HAL_SD_ReadBlocks(verify) result: %d", verify_result);
-    
-    if (verify_result == HAL_OK) {
-        if (memcmp(write_buffer, verify_buffer, 512) == 0) {
-            LOG_INFO("[SDStorage] ✅ SD card read/write test successful - hardware is OK");
-        } else {
-            LOG_WARN("[SDStorage] ⚠️ SD card data verification failed - possible data corruption");
-        }
-    }
-    
-    // 4. HAL 테스트에서 검증 실패가 있어도 f_mkdir 시도 (블로킹 방지를 위해 스킵)
-    if (verify_result != HAL_OK) {
-        LOG_WARN("[SDStorage] Verify read failed - skipping f_mkdir to avoid blocking");
-        LOG_INFO("[SDStorage] Will try direct file creation instead of directory");
-        return SDSTORAGE_OK;  // 디렉토리 없이도 파일 생성 시도
-    }
-    
-    LOG_INFO("[SDStorage] HAL tests passed - skipping f_mkdir to avoid system blocking");
-    LOG_WARN("[SDStorage] Directory creation disabled - files will be created in root");
-    FRESULT mkdir_result = FR_OK;  // 강제로 성공 처리
-    LOG_INFO("[SDStorage] f_mkdir bypassed - proceeding with root directory logging");
     
     // FR_EXIST(9)는 이미 존재함을 의미하므로 성공으로 처리
     if (mkdir_result == FR_OK || mkdir_result == FR_EXIST) {
         LOG_INFO("[SDStorage] Directory ready (created or already exists)");
-        return SDSTORAGE_OK;
+        return SDSTORAGE_OK;  // 디렉토리 성공
     } else {
         LOG_ERROR("[SDStorage] f_mkdir failed: %d - FatFs level problem", mkdir_result);
         LOG_INFO("[SDStorage] Will try direct file creation without directory");
-        return SDSTORAGE_OK;  // 디렉토리 실패해도 루트에 파일 생성 시도
+        return SDSTORAGE_ERROR;  // 디렉토리 실패
     }
 #else
     // PC: mkdir 시뮬레이션 (테스트에서는 성공으로 가정)
@@ -473,43 +431,20 @@ static int _create_log_directory(void)
 
 static int _generate_log_filename(char* filename, size_t max_len)
 {
-    // uint32_t timestamp = _get_current_timestamp(); - unused variable removed
+    // 8.3 형식 파일명 생성 (시간 불필요)
+    static int file_counter = 1;
     
-    // YYYYMMDD_HHMMSS 형식으로 타임스탬프 생성
-    uint16_t year = 2025;   // 기본값
-    uint8_t month = 1, day = 1, hour = 0, minute = 0, second = 0;
-    
-#ifdef STM32F746xx
-    // STM32: RTC에서 실제 시간 읽기
-    RTC_TimeTypeDef sTime;
-    RTC_DateTypeDef sDate;
-    
-    if (HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN) == HAL_OK &&
-        HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN) == HAL_OK) {
-        year = 2000 + sDate.Year;
-        month = sDate.Month;
-        day = sDate.Date;
-        hour = sTime.Hours;
-        minute = sTime.Minutes;
-        second = sTime.Seconds;
+    // 디렉토리 사용 가능 여부에 따라 경로 결정
+    int result;
+    if (g_directory_available) {
+        // lora_logs 디렉토리에 파일 생성 (8.3 형식)
+        result = snprintf(filename, max_len, "lora_logs/LORA%04d.BIN", file_counter);
+    } else {
+        // 루트 디렉토리에 파일 생성 (8.3 형식)
+        result = snprintf(filename, max_len, "LORA%04d.BIN", file_counter);
     }
-#else
-    // PC: 간단한 타임스탬프 시뮬레이션 (테스트용)
-    // 실제 시간 대신 고정된 값 사용
-    year = 2025;
-    month = 7;
-    day = 23;
-    hour = 10;
-    minute = 30;
-    second = timestamp % 60;  // 타임스탬프 기반 변화
-#endif
     
-    // 디렉토리가 없을 경우를 대비해 루트에 파일 생성
-    int result = snprintf(filename, max_len, 
-                         "%s%04d%02d%02d_%02d%02d%02d%s",
-                         SDSTORAGE_LOG_PREFIX,
-                         year, month, day, hour, minute, second,
-                         SDSTORAGE_LOG_EXTENSION);
+    file_counter++;
     
     if (result < 0 || (size_t)result >= max_len) {
         return SDSTORAGE_ERROR;

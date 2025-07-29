@@ -169,13 +169,13 @@ static DSTATUS SD_CheckStatus(BYTE lun)
   // HAL 기반 카드 상태 확인 (BSP 우회)
   HAL_SD_CardStateTypeDef cardState = HAL_SD_GetCardState(&hsd1);
   
-  LOG_INFO("[sd_diskio] HAL_SD_GetCardState: %d", cardState);
+  // SD 카드 상태 확인
   
   if(cardState == HAL_SD_CARD_TRANSFER)
   {
     // 카드가 TRANSFER 상태이면 초기화 완료로 간주
     Stat = 0;  // 모든 에러 플래그 클리어
-    LOG_INFO("[sd_diskio] SD card status: READY (0x00)");
+    // SD 카드 준비됨
   }
   else
   {
@@ -321,12 +321,11 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
   {
 #endif
     /* Fast path cause destination buffer is correctly aligned - using polling mode */
-    LOG_INFO("[sd_diskio] Using BSP_SD_ReadBlocks (polling) instead of DMA");
+    // 폴링 모드로 SD 카드 읽기
     ret = BSP_SD_ReadBlocks((uint32_t*)buff, (uint32_t)(sector), count, SD_TIMEOUT);
 
     if (ret == MSD_OK) {
-        LOG_INFO("[sd_diskio] BSP_SD_ReadBlocks result: %d", ret);
-        LOG_INFO("[sd_diskio] Polling read completed - no queue wait needed");
+        // 읽기 성공
         res = RES_OK;
 #if (ENABLE_SD_DMA_CACHE_MAINTENANCE == 1)
         /*
@@ -336,7 +335,7 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
         alignedAddr = (uint32_t)buff & ~0x1F;
         SCB_InvalidateDCache_by_Addr((uint32_t*)alignedAddr, count*BLOCKSIZE + ((uint32_t)buff - alignedAddr));
 #endif
-        LOG_INFO("[sd_diskio] Read operation successful");
+        // 읽기 완료
     }
 
 #if defined(ENABLE_SCRATCH_BUFFER)
@@ -351,12 +350,14 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
         ret = BSP_SD_ReadBlocks((uint32_t*)scratch, (uint32_t)sector++, 1, SD_TIMEOUT);
         if (ret == MSD_OK )
         {
-          /* Polling mode - no queue wait needed */
+          // 폴링 모드 - 큐 대기 없이 즉시 완료 처리
+          LOG_INFO("[sd_diskio] Polling operation completed successfully");
 #if (osCMSIS < 0x20000U)
           /* wait for a message from the queue or a timeout */
-          event = osMessageGet(SDQueueID, SD_TIMEOUT);
+          // 폴링 모드 - DMA 큐 대기 로직 완전 제거 (동기 방식)
 
-          if (event.status == osEventMessage)
+          // DMA 이벤트 체크 제거 - 폴링 모드에서는 불필요
+          if (1)  // 항상 실행
           {
             if (event.value.v == READ_CPLT_MSG)
             {
@@ -364,7 +365,7 @@ DRESULT SD_read(BYTE lun, BYTE *buff, DWORD sector, UINT count)
               /* block until SDIO IP is ready or a timeout occur */
               while(osKernelSysTick() - timer <SD_TIMEOUT)
 #else
-                status = osMessageQueueGet(SDQueueID, (void *)&event, NULL, SD_TIMEOUT);
+                // 폴링 모드 - DMA 큐 대기 로직 완전 제거 (동기 방식)
               if ((status == osOK) && (event == READ_CPLT_MSG))
               {
                 timer = osKernelGetTickCount();
@@ -460,16 +461,16 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
 #endif
 
   // BSP 폴링 모드 사용 (DMA 큐 대기 제거)
-  LOG_INFO("[sd_diskio] Using BSP_SD_WriteBlocks (polling) instead of DMA");
+  // 폴링 모드로 SD 카드 쓰기
   ret = BSP_SD_WriteBlocks((uint32_t*)buff, (uint32_t)sector, count, SD_TIMEOUT);
-  LOG_INFO("[sd_diskio] BSP_SD_WriteBlocks result: %d", ret);
+  // 쓰기 결과 확인
   
   if(ret == MSD_OK)
   {
     // 폴링 방식이므로 큐 대기 불필요 - 즉시 성공 처리
-    LOG_INFO("[sd_diskio] Polling write completed - no queue wait needed");
+    // 쓰기 완료
     res = RES_OK;
-    LOG_INFO("[sd_diskio] Write operation successful");
+    // 쓰기 성공
   }
 #if defined(ENABLE_SCRATCH_BUFFER)
   else {
@@ -490,12 +491,14 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
         ret = BSP_SD_WriteBlocks((uint32_t*)scratch, (uint32_t)sector++, 1, SD_TIMEOUT);
         if (ret == MSD_OK )
         {
-          /* Polling mode - no queue wait needed */
+          // 폴링 모드 - 큐 대기 없이 즉시 완료 처리
+          LOG_INFO("[sd_diskio] Polling operation completed successfully");
 #if (osCMSIS < 0x20000U)
           /* wait for a message from the queue or a timeout */
-          event = osMessageGet(SDQueueID, SD_TIMEOUT);
+          // 폴링 모드 - DMA 큐 대기 로직 완전 제거 (동기 방식)
 
-          if (event.status == osEventMessage)
+          // DMA 이벤트 체크 제거 - 폴링 모드에서는 불필요
+          if (1)  // 항상 실행
           {
             if (event.value.v == READ_CPLT_MSG)
             {
@@ -503,7 +506,7 @@ DRESULT SD_write(BYTE lun, const BYTE *buff, DWORD sector, UINT count)
               /* block until SDIO IP is ready or a timeout occur */
               while(osKernelSysTick() - timer <SD_TIMEOUT)
 #else
-                status = osMessageQueueGet(SDQueueID, (void *)&event, NULL, SD_TIMEOUT);
+                // 폴링 모드 - DMA 큐 대기 로직 완전 제거 (동기 방식)
               if ((status == osOK) && (event == READ_CPLT_MSG))
               {
                 timer = osKernelGetTickCount();
