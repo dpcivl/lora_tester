@@ -349,38 +349,51 @@ int SDStorage_WriteLog(const void* data, size_t size)
     if (open_result == FR_OK) {
         // FA_OPEN_APPEND 사용 시 자동으로 파일 끝에 위치
         
-        // 원본 데이터 쓰기
-        UINT bytes_written;
-        FRESULT write_result = f_write(&temp_file, data, size, &bytes_written);
+        // 원본 데이터 + 줄바꿈을 함께 쓰기 (FR_INVALID_OBJECT 방지)
+        char write_buffer[512];  // 충분한 버퍼 크기
+        UINT total_bytes_to_write = size + 2;  // 원본 데이터 + \r\n
         
-        if (write_result == FR_OK && bytes_written == size) {
-            // 줄바꿈 추가 (Windows 호환을 위해 \r\n 사용)
-            UINT newline_written;
-            FRESULT newline_result = f_write(&temp_file, "\r\n", 2, &newline_written);
+        if (size + 2 < sizeof(write_buffer)) {
+            // 원본 데이터 복사
+            memcpy(write_buffer, data, size);
+            // 줄바꿈 추가
+            write_buffer[size] = '\r';
+            write_buffer[size + 1] = '\n';
+            
+            // 한 번에 쓰기
+            UINT bytes_written;
+            FRESULT write_result = f_write(&temp_file, write_buffer, total_bytes_to_write, &bytes_written);
             
             // 즉시 동기화 및 닫기
             f_sync(&temp_file);
             f_close(&temp_file);
             _register_file_closed();  // 추적 해제
             
-            if (newline_result == FR_OK) {
-                g_current_log_size += bytes_written + newline_written;
-                LOG_DEBUG("[SDStorage] Log written successfully: %d+2 bytes", bytes_written);
+            if (write_result == FR_OK && bytes_written == total_bytes_to_write) {
+                g_current_log_size += bytes_written;
+                LOG_DEBUG("[SDStorage] Log written successfully: %d bytes (including CRLF)", bytes_written);
                 return SDSTORAGE_OK;
             } else {
-                LOG_WARN("[SDStorage] Newline write failed: %d", newline_result);
-                g_current_log_size += bytes_written;  // 원본 데이터는 성공했으므로 카운트
-                return SDSTORAGE_OK;  // 원본 데이터 쓰기는 성공했으므로 OK 반환
+                LOG_ERROR("[SDStorage] f_write failed: %d, written: %d/%d", write_result, bytes_written, total_bytes_to_write);
+                return SDSTORAGE_FILE_ERROR;
             }
         } else {
-            f_close(&temp_file);  // 실패해도 파일 닫기
+            // 버퍼 크기 초과 - 원본 데이터만 쓰기
+            UINT bytes_written;
+            FRESULT write_result = f_write(&temp_file, data, size, &bytes_written);
+            
+            // 즉시 동기화 및 닫기
+            f_sync(&temp_file);
+            f_close(&temp_file);
             _register_file_closed();  // 추적 해제
-            if (write_result != FR_OK) {
-                LOG_ERROR("[SDStorage] f_write failed: %d", write_result);
+            
+            if (write_result == FR_OK && bytes_written == size) {
+                g_current_log_size += bytes_written;
+                LOG_DEBUG("[SDStorage] Log written successfully: %d bytes (no CRLF due to size)", bytes_written);
+                return SDSTORAGE_OK;
+            } else {
+                LOG_ERROR("[SDStorage] f_write failed: %d, written: %d/%d", write_result, bytes_written, size);
                 return SDSTORAGE_FILE_ERROR;
-            } else if (bytes_written != size) {
-                LOG_WARN("[SDStorage] Partial write: %d/%d bytes", bytes_written, size);
-                return SDSTORAGE_DISK_FULL;
             }
         }
     } else {
