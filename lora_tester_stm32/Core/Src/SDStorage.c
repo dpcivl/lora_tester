@@ -32,9 +32,6 @@ static bool g_directory_available = false;  // 디렉토리 사용 가능 여부
 static FIL g_persistent_log_file;  // 지속적으로 열려있는 로그 파일
 static bool g_file_is_open = false;  // 파일이 열려있는 상태 추적
 
-// 기존 방식 보존 (주석 처리)
-// static FIL* g_current_file_handle = NULL;  // 현재 열린 파일 핸들 추적
-// static char g_current_open_file[256] = {0};  // 현재 열린 파일명 추적
 #else
 static FILE* g_log_file = NULL;
 #endif
@@ -131,28 +128,6 @@ static void _close_persistent_file(void) {
     }
 }
 
-// 기존 방식 보존 (주석 처리)
-/*
-static void _ensure_file_closed(void) {
-    if (g_current_file_handle != NULL) {
-        LOG_DEBUG("[SDStorage] Force closing previously opened file: %s", g_current_open_file);
-        f_close(g_current_file_handle);
-        g_current_file_handle = NULL;
-        memset(g_current_open_file, 0, sizeof(g_current_open_file));
-    }
-}
-
-static void _register_file_opened(FIL* file_handle, const char* filename) {
-    g_current_file_handle = file_handle;
-    strncpy(g_current_open_file, filename, sizeof(g_current_open_file) - 1);
-    g_current_open_file[sizeof(g_current_open_file) - 1] = '\0';
-}
-
-static void _register_file_closed(void) {
-    g_current_file_handle = NULL;
-    memset(g_current_open_file, 0, sizeof(g_current_open_file));
-}
-*/
 #endif
 
 // 내부 함수 선언
@@ -402,160 +377,6 @@ int SDStorage_WriteLog(const void* data, size_t size)
         LOG_ERROR("[SDStorage] Data too large for write buffer: %d bytes", size);
         return SDSTORAGE_INVALID_PARAM;
     }
-    
-    // 기존 방식 보존 (주석 처리)
-    /*
-    // STM32 환경: 안정적인 열기-쓰기-닫기 방식
-    
-    // 로그 파일명이 없으면 생성
-    if (strlen(g_current_log_file) == 0) {
-        if (_generate_log_filename(g_current_log_file, sizeof(g_current_log_file)) != SDSTORAGE_OK) {
-            LOG_ERROR("[SDStorage] Failed to generate log filename");
-            return SDSTORAGE_ERROR;
-        }
-    }
-    
-    // SD 카드 상태 변화에 robust한 방식: 매번 열고 닫기
-    FIL temp_file;
-    memset(&temp_file, 0, sizeof(temp_file));
-    
-    // 파일 닫기 보장: 이전에 열린 파일이 있으면 강제로 닫기
-    _ensure_file_closed();
-    
-    // 성공 프로젝트 방식: 디스크 상태 먼저 확인
-    DSTATUS current_disk_stat = disk_status(0);
-    if (current_disk_stat != 0) {
-        LOG_WARN("[SDStorage] Disk not ready (%d), reinitializing...", current_disk_stat);
-        DSTATUS init_result = disk_initialize(0);
-        if (init_result != 0) {
-            LOG_ERROR("[SDStorage] Disk reinitialization failed: %d", init_result);
-            return SDSTORAGE_NOT_READY;
-        }
-    }
-    
-    // 파일 열기 (성공 프로젝트 방식: 단계적 시도)
-    FRESULT open_result = f_open(&temp_file, g_current_log_file, FA_OPEN_APPEND | FA_WRITE);
-    
-    // 파일 열기 성공 시 추적 등록
-    if (open_result == FR_OK) {
-        _register_file_opened(&temp_file, g_current_log_file);
-        LOG_DEBUG("[SDStorage] File opened and registered: %s", g_current_log_file);
-    }
-    
-    // f_open 실패 시 성공 프로젝트 방식의 복구 로직
-    if (open_result != FR_OK) {
-        LOG_WARN("[SDStorage] f_open failed (%d), trying recovery...", open_result);
-        
-        // 1단계: 마운트 재시도
-        f_mount(NULL, SDPath, 0);  // 언마운트
-        HAL_Delay(200);
-        FRESULT remount_result = f_mount(&SDFatFS, SDPath, 1);  // 강제 재마운트
-        
-        if (remount_result == FR_OK) {
-            // 재마운트 성공 후 다시 파일 열기 시도
-            open_result = f_open(&temp_file, g_current_log_file, FA_OPEN_APPEND | FA_WRITE);
-            if (open_result == FR_OK) {
-                _register_file_opened(&temp_file, g_current_log_file);
-                LOG_INFO("[SDStorage] File opened after remount recovery");
-            }
-        }
-        
-        // 2단계: 여전히 실패하면 f_mkfs 시도
-        if (open_result != FR_OK) {
-            LOG_WARN("[SDStorage] File still failed, trying f_mkfs recovery...");
-            static BYTE work[4096];
-            FRESULT mkfs_result = f_mkfs(SDPath, FM_ANY, 0, work, sizeof(work));
-            
-            if (mkfs_result == FR_OK) {
-                LOG_INFO("[SDStorage] f_mkfs successful, remounting...");
-                f_mount(NULL, SDPath, 0);
-                HAL_Delay(500);
-                remount_result = f_mount(&SDFatFS, SDPath, 1);
-                
-                if (remount_result == FR_OK) {
-                    // 파일명 재생성 (mkfs 후 파일이 사라졌으므로)
-                    _generate_log_filename(g_current_log_file, sizeof(g_current_log_file));
-                    open_result = f_open(&temp_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
-                    if (open_result == FR_OK) {
-                        _register_file_opened(&temp_file, g_current_log_file);
-                        LOG_INFO("[SDStorage] File created after f_mkfs recovery");
-                    }
-                }
-            }
-        }
-        
-        // 모든 복구 시도 실패
-        if (open_result != FR_OK) {
-            LOG_ERROR("[SDStorage] All recovery attempts failed: %d", open_result);
-            return SDSTORAGE_FILE_ERROR;
-        }
-    }
-    
-    if (open_result == FR_OK) {
-        // FA_OPEN_APPEND 사용 시 자동으로 파일 끝에 위치
-        
-        // 원본 데이터 + 줄바꿈을 함께 쓰기 (FR_INVALID_OBJECT 방지)
-        char write_buffer[512];  // 충분한 버퍼 크기
-        UINT total_bytes_to_write = size + 2;  // 원본 데이터 + \r\n
-        
-        if (size + 2 < sizeof(write_buffer)) {
-            // 원본 데이터 복사
-            memcpy(write_buffer, data, size);
-            // 줄바꿈 추가
-            write_buffer[size] = '\r';
-            write_buffer[size + 1] = '\n';
-            
-            // 한 번에 쓰기
-            UINT bytes_written;
-            FRESULT write_result = f_write(&temp_file, write_buffer, total_bytes_to_write, &bytes_written);
-            
-            // 즉시 동기화 및 닫기
-            f_sync(&temp_file);
-            f_close(&temp_file);
-            _register_file_closed();  // 추적 해제
-            
-            if (write_result == FR_OK && bytes_written == total_bytes_to_write) {
-                g_current_log_size += bytes_written;
-                LOG_DEBUG("[SDStorage] Log written successfully: %d bytes (including CRLF)", bytes_written);
-                return SDSTORAGE_OK;
-            } else {
-                LOG_ERROR("[SDStorage] f_write failed: %d, written: %d/%d", write_result, bytes_written, total_bytes_to_write);
-                return SDSTORAGE_FILE_ERROR;
-            }
-        } else {
-            // 버퍼 크기 초과 - 원본 데이터만 쓰기
-            UINT bytes_written;
-            FRESULT write_result = f_write(&temp_file, data, size, &bytes_written);
-            
-            // 즉시 동기화 및 닫기
-            f_sync(&temp_file);
-            f_close(&temp_file);
-            _register_file_closed();  // 추적 해제
-            
-            if (write_result == FR_OK && bytes_written == size) {
-                g_current_log_size += bytes_written;
-                LOG_DEBUG("[SDStorage] Log written successfully: %d bytes (no CRLF due to size)", bytes_written);
-                return SDSTORAGE_OK;
-            } else {
-                LOG_ERROR("[SDStorage] f_write failed: %d, written: %d/%d", write_result, bytes_written, size);
-                return SDSTORAGE_FILE_ERROR;
-            }
-        }
-    } else {
-        LOG_ERROR("[SDStorage] f_open failed: %d - SD card state may have changed", open_result);
-        
-        // SD 카드 상태 재확인
-        DSTATUS current_status = disk_status(0);
-        LOG_WARN("[SDStorage] Current disk status: 0x%02X", current_status);
-        
-        if (current_status != 0) {
-            LOG_WARN("[SDStorage] SD card not ready - temporarily disabling SD logging");
-            return SDSTORAGE_NOT_READY;
-        }
-        
-        return SDSTORAGE_FILE_ERROR;
-    }
-    */
 #else
     // PC/테스트 환경: 파일 I/O 시뮬레이션 (항상 성공)
     // 실제 파일 쓰기 없이 성공으로 처리
