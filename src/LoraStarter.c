@@ -127,7 +127,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
             break;
         case LORA_STATE_WAIT_TIMEREQ_OK:
             if (uart_rx && is_response_ok(uart_rx)) {
-                LOG_WARN("[LoRa] ✅ Time synchronization enabled");
+                LOG_INFO("[LoRa] ✅ Time synchronization enabled");
                 ctx->state = LORA_STATE_SEND_LTIME;
             }
             break;

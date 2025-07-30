@@ -145,7 +145,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
             break;
         case LORA_STATE_WAIT_TIMEREQ_OK:
             if (uart_rx && is_response_ok(uart_rx)) {
-                LOG_WARN("[LoRa] ✅ Time synchronization enabled");
+                LOG_INFO("[LoRa] ✅ Time synchronization enabled");
                 ctx->state = LORA_STATE_WAIT_TIME_SYNC;
                 ctx->last_retry_time = TIME_GetCurrentMs(); // 5초 지연 시작 시점 기록
             }
@@ -183,9 +183,9 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                     // 현재 상태에 따라 다른 동작
                     if (ctx->send_count == 0) {
                         // 첫 번째 시간 동기화 (JOIN 후) - 주기적 전송 시작
-                        LOG_WARN("[LoRa] 🕐 Initial time synchronized, starting periodic transmission");
+                        LOG_INFO("[LoRa] 🕐 Initial time synchronized, starting periodic transmission");
                         ctx->state = LORA_STATE_SEND_PERIODIC;
-                        LOG_WARN("[LoRa] 🚀 PERIODIC SEND STARTED with message: %s", ctx->send_message);
+                        LOG_INFO("[LoRa] 🚀 PERIODIC SEND STARTED with message: %s", ctx->send_message);
                     } else {
                         // 주기적 전송 전 시간 조회 완료 - SEND 실행
                         LOG_INFO("[LoRa] 🕐 Time synchronized, proceeding to SEND");
