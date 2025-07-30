@@ -4,6 +4,7 @@
 #include "ResponseHandler.h"
 #include "time.h"
 #include "logger.h"
+#include "system_config.h"
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -61,13 +62,13 @@ void LoraStarter_InitWithDefaults(LoraStarterContext* ctx, const char* send_mess
     ctx->commands = LORA_DEFAULT_INIT_COMMANDS;
     ctx->num_commands = LORA_DEFAULT_INIT_COMMANDS_COUNT;
     ctx->send_message = (send_message != NULL) ? send_message : "TEST";
-    ctx->max_retry_count = 0;  // 0 = 무제한 재시도
-    ctx->send_interval_ms = 300000;  // 5분 간격
+    ctx->max_retry_count = LORA_MAX_RETRY_COUNT;
+    ctx->send_interval_ms = LORA_SEND_INTERVAL_MS;
     ctx->last_send_time = 0;
     ctx->send_count = 0;
     ctx->error_count = 0;
     ctx->last_retry_time = 0;
-    ctx->retry_delay_ms = 1000;  // 1초 초기 지연
+    ctx->retry_delay_ms = LORA_RETRY_DELAY_MS;
     
     LOG_INFO("[LoRa] Initialized with defaults - Commands: %d, Message: %s", 
              ctx->num_commands, ctx->send_message);
@@ -157,7 +158,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
         case LORA_STATE_WAIT_TIME_SYNC:
             {
                 uint32_t current_time = TIME_GetCurrentMs();
-                const uint32_t TIME_SYNC_DELAY_MS = 5000; // 5초 대기
+                const uint32_t TIME_SYNC_DELAY_MS = LORA_TIME_SYNC_DELAY_MS;
                 
                 if (ctx->last_retry_time == 0) {
                     // 처음 진입 시 시작 시간 기록
@@ -212,9 +213,9 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 // 순차 번호 메시지 생성 (0001~9999, JOIN마다 리셋)
                 snprintf(sequential_message, sizeof(sequential_message), "%04d", g_message_number);
                 
-                // 9999 다음에는 0001로 다시 시작
+                // 최대값 다음에는 0001로 다시 시작
                 g_message_number++;
-                if (g_message_number > 9999) {
+                if (g_message_number > LORA_MESSAGE_NUMBER_MAX) {
                     g_message_number = 1;
                 }
                 
@@ -242,7 +243,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                         // SEND 성공 후 다음 전송 대기 상태로 전환
                         ctx->state = LORA_STATE_WAIT_SEND_INTERVAL;
                         ctx->error_count = 0; // 성공 시 에러 카운터 리셋
-                        ctx->retry_delay_ms = 1000; // 재시도 지연 시간 리셋
+                        ctx->retry_delay_ms = LORA_RETRY_DELAY_MS; // 재시도 지연 시간 리셋
                         ctx->last_send_time = TIME_GetCurrentMs(); // 송신 완료 시간 저장
                         LOG_INFO("[LoRa] SEND successful, waiting for next interval...");
                         break;

@@ -9,6 +9,7 @@
 #include "logger.h"
 #include "../SDStorage.h"
 #include "../../Inc/ResponseHandler.h"
+#include "../../Inc/system_config.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -126,7 +127,7 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
     if (level < filter_level) return;
     if (level < current_config.level) return;
     
-    char buffer[1024];  // 버퍼 크기 2배 증가 (512 → 1024)
+    char buffer[LOGGER_MAX_MESSAGE_SIZE];
     const char* level_str[] = {"[DEBUG]", "[INFO]", "[WARN]", "[ERROR]"};
     
     // 타임스탬프 + 레벨 문자열 추가

@@ -1,5 +1,6 @@
 #include "SDStorage.h"
 #include "logger.h"
+#include "system_config.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -133,178 +134,37 @@ static void _close_persistent_file(void) {
 // 내부 함수 선언
 static int _create_log_directory(void);
 static void _close_persistent_file(void);
+static int _initialize_sd_hardware(void);
+static int _mount_filesystem_with_retry(void);
 // static uint32_t _get_current_timestamp(void); - unused function removed
 
 int SDStorage_Init(void)
 {
-#ifdef STM32F746xx
-    // STM32 환경: FatFs 초기화 및 진단
     LOG_INFO("[SDStorage] Starting SD card initialization...");
     
     // 초기화 시 지속적 파일 닫기
     _close_persistent_file();
     
-    // 1. 하드웨어 상태 진단 및 TRANSFER 상태까지 대기
-    extern SD_HandleTypeDef hsd1;
-    HAL_SD_CardStateTypeDef card_state = HAL_SD_GetCardState(&hsd1);
-    LOG_INFO("[SDStorage] Initial SD card state: %d", card_state);
-    
-    // SD 카드가 TRANSFER 상태가 될 때까지 대기 (성공 프로젝트 패턴)
-    int wait_count = 0;
-    while (card_state != HAL_SD_CARD_TRANSFER && wait_count < 50) {  // 최대 5초 대기
-        LOG_INFO("[SDStorage] Waiting for SD card TRANSFER state... (attempt %d)", wait_count + 1);
-        HAL_Delay(100);
-        card_state = HAL_SD_GetCardState(&hsd1);
-        wait_count++;
+    // 1. SD 하드웨어 초기화 및 상태 확인
+    int hw_result = _initialize_sd_hardware();
+    if (hw_result != SDSTORAGE_OK) {
+        return hw_result;
     }
     
-    if (card_state == HAL_SD_CARD_TRANSFER) {
-        LOG_INFO("[SDStorage] ✅ SD card reached TRANSFER state successfully");
-        
-        // SDMMC 에러 코드 상세 체크 (성공 프로젝트 패턴)
-        if (hsd1.ErrorCode != HAL_SD_ERROR_NONE) {
-            LOG_WARN("[SDStorage] SDMMC ErrorCode detected: 0x%08X", hsd1.ErrorCode);
-            
-            if (hsd1.ErrorCode & SDMMC_ERROR_TX_UNDERRUN) {
-                LOG_WARN("[SDStorage] TX_UNDERRUN detected - clock may be too fast");
-            }
-            if (hsd1.ErrorCode & SDMMC_ERROR_DATA_CRC_FAIL) {
-                LOG_WARN("[SDStorage] CRC_FAIL detected - cache issue possible");
-                SCB_CleanInvalidateDCache();
-            }
-            
-            // 에러 코드 클리어
-            hsd1.ErrorCode = HAL_SD_ERROR_NONE;
-        }
-    } else {
-        LOG_ERROR("[SDStorage] ❌ SD card failed to reach TRANSFER state (state: %d)", card_state);
-        LOG_ERROR("[SDStorage] SDMMC ErrorCode: 0x%08X", hsd1.ErrorCode);
-        return SDSTORAGE_ERROR;
-    }
-    
-    DSTATUS disk_status = disk_initialize(0);
-    LOG_INFO("[SDStorage] disk_initialize result: 0x%02X", disk_status);
-    
-    // disk_initialize 실패 시 조기 종료 (블로킹 방지)
-    if (disk_status != 0) {
-        LOG_ERROR("[SDStorage] disk_initialize failed - SD card not ready");
-        LOG_ERROR("[SDStorage] Possible causes: write-protected, bad card, or BSP/HAL conflict");
-        return SDSTORAGE_ERROR;
-    }
-    
-    // 2. 파일시스템 마운트 시도 (지연 마운트로 변경 - 블로킹 방지)
-    LOG_INFO("[SDStorage] Using deferred mount (flag=0) to avoid blocking...");
-    
-    // f_mount 호출 전에 충분한 지연 (SD 카드 안정화)
-    #ifdef STM32F746xx
-    LOG_INFO("[SDStorage] Waiting for SD card stabilization (500ms)...");
-    HAL_Delay(500);
-    #endif
-    
-    // f_mount 블로킹 문제 - 완전 우회 시도
-    LOG_WARN("[SDStorage] f_mount consistently blocks despite all fixes");
-    LOG_INFO("[SDStorage] Attempting direct file operations without f_mount...");
-    LOG_INFO("[SDStorage] Some FatFs implementations support auto-mount on first file access");
-    
-    // f_mount 여러 번 재시도 (성공 프로젝트 패턴)
-    LOG_INFO("[SDStorage] Attempting f_mount with retry logic...");
-    FRESULT mount_result = FR_DISK_ERR;  // 초기값
-    
-    for (int retry = 0; retry < 3; retry++) {
-        LOG_INFO("[SDStorage] f_mount attempt %d/3...", retry + 1);
-        mount_result = f_mount(&SDFatFS, SDPath, 1);  // 즉시 마운트
-        LOG_INFO("[SDStorage] f_mount result: %d", mount_result);
-        
-        if (mount_result == FR_OK) {
-            LOG_INFO("[SDStorage] ✅ f_mount successful on attempt %d", retry + 1);
-            break;
-        } else {
-            LOG_WARN("[SDStorage] f_mount failed on attempt %d, retrying in 1000ms...", retry + 1);
-            if (retry < 2) {  // 마지막 시도가 아니면 대기
-                // STM32F7 D-Cache 클리어 (성공 프로젝트 패턴)
-                LOG_INFO("[SDStorage] Clearing D-Cache for STM32F7 compatibility...");
-                SCB_CleanInvalidateDCache();
-                HAL_Delay(1000);
-            }
-        }
-    }
-    
-    // 즉시 마운트 성공 시 쓰기 준비 완료
-    if (mount_result == FR_OK) {
-        LOG_INFO("[SDStorage] Immediate mount successful - SD ready for write operations");
-    }
-    
-    if (mount_result != FR_OK) {
-        LOG_WARN("[SDStorage] f_mount failed with result: %d", mount_result);
-        
-        // SD 카드가 이미 포맷되어 있다면 f_mkfs 시도하지 않고 다른 접근법 사용
-        if (mount_result == FR_DISK_ERR) {
-            LOG_WARN("[SDStorage] FR_DISK_ERR detected - SD card may be formatted but incompatible");
-            LOG_INFO("[SDStorage] Skipping f_mkfs since SD card is already FAT32 formatted");
-            LOG_INFO("[SDStorage] Trying alternative mount approach...");
-            
-            // 다른 마운트 방식 시도 (지연 마운트)
-            LOG_INFO("[SDStorage] Attempting deferred mount (flag=0)...");
-            mount_result = f_mount(&SDFatFS, SDPath, 0);
-            LOG_INFO("[SDStorage] Deferred mount result: %d", mount_result);
-            
-            if (mount_result == FR_OK) {
-                LOG_INFO("[SDStorage] Deferred mount successful!");
-            } else {
-                LOG_ERROR("[SDStorage] Both immediate and deferred mount failed");
-                LOG_ERROR("[SDStorage] SD card may have hardware compatibility issues");
-                return SDSTORAGE_ERROR;
-            }
-        }
-        else if (mount_result == FR_NOT_READY || mount_result == FR_NO_FILESYSTEM) {
-            // 작업 버퍼 할당 (전역 또는 스택)
-            static BYTE work[_MAX_SS];
-            
-            // 실제 f_mkfs 시도
-            LOG_INFO("[SDStorage] Attempting to create filesystem with f_mkfs...");
-            FRESULT mkfs_result = f_mkfs(SDPath, FM_ANY, 0, work, sizeof(work));
-            LOG_INFO("[SDStorage] f_mkfs(FM_ANY) result: %d", mkfs_result);
-            
-            if (mkfs_result != FR_OK) {
-                // FAT32로 다시 시도
-                LOG_INFO("[SDStorage] Retrying with explicit FAT32 format...");
-                mkfs_result = f_mkfs(SDPath, FM_FAT32, 4096, work, sizeof(work));
-                LOG_INFO("[SDStorage] f_mkfs(FM_FAT32) result: %d", mkfs_result);
-                
-                if (mkfs_result != FR_OK) {
-                    LOG_ERROR("[SDStorage] File system creation failed: %d", mkfs_result);
-                    LOG_ERROR("[SDStorage] Possible SD card hardware issue - try different card");
-                    return SDSTORAGE_ERROR;
-                }
-            }
-            
-            // 파일시스템 생성 후 재마운트 시도
-            mount_result = f_mount(&SDFatFS, SDPath, 1);
-            LOG_INFO("[SDStorage] Re-mount after mkfs result: %d", mount_result);
-            
-            if (mount_result != FR_OK) {
-                LOG_ERROR("[SDStorage] Re-mount failed after mkfs: %d", mount_result);
-                return SDSTORAGE_ERROR;
-            }
-        } else {
-            LOG_ERROR("[SDStorage] Mount failed with unrecoverable error: %d", mount_result);
-            return SDSTORAGE_ERROR;
-        }
+    // 2. 파일시스템 마운트 (재시도 로직 포함)
+    int mount_result = _mount_filesystem_with_retry();
+    if (mount_result != SDSTORAGE_OK) {
+        return mount_result;
     }
     
     LOG_INFO("[SDStorage] File system mount successful");
-#else
-    // PC/테스트 환경: 시뮬레이션
-    LOG_INFO("[SDStorage] Test environment - simulating successful initialization");
-#endif
-
-    // FatFs 마운트 성공 확인됨
     
-    // 디렉토리 생성 시도
+    // 3. 디렉토리 생성 시도
     LOG_INFO("[SDStorage] Creating log directory...");
     int dir_result = _create_log_directory();
     g_directory_available = (dir_result == SDSTORAGE_OK);
     
+    // 4. 최종 상태 설정
     g_sd_ready = true;
     
     // 기존 로그 파일명이 있으면 보존, 크기는 리셋하지 않음
@@ -349,7 +209,7 @@ int SDStorage_WriteLog(const void* data, size_t size)
     }
     
     // 데이터 + 줄바꿈 추가하여 쓰기
-    char write_buffer[1024];  // 충분한 버퍼 크기
+    char write_buffer[LOGGER_WRITE_BUFFER_SIZE];
     if (size + 2 < sizeof(write_buffer)) {
         // 원본 데이터 복사
         memcpy(write_buffer, data, size);
@@ -520,11 +380,137 @@ static int _create_log_directory(void)
 #endif
 }
 
-// static uint32_t _get_current_timestamp(void) - unused function removed
-// {
-// #ifdef STM32F746xx
-//     return HAL_GetTick();
-// #else
-//     return (uint32_t)time(NULL);
-// #endif
-// }
+// SD 하드웨어 초기화 및 상태 확인
+static int _initialize_sd_hardware(void)
+{
+#ifdef STM32F746xx
+    extern SD_HandleTypeDef hsd1;
+    HAL_SD_CardStateTypeDef card_state = HAL_SD_GetCardState(&hsd1);
+    LOG_INFO("[SDStorage] Initial SD card state: %d", card_state);
+    
+    // SD 카드가 TRANSFER 상태가 될 때까지 대기
+    int wait_count = 0;
+    while (card_state != HAL_SD_CARD_TRANSFER && wait_count < SD_TRANSFER_WAIT_MAX_COUNT) {
+        LOG_INFO("[SDStorage] Waiting for SD card TRANSFER state... (attempt %d)", wait_count + 1);
+        HAL_Delay(SD_TRANSFER_CHECK_INTERVAL_MS);
+        card_state = HAL_SD_GetCardState(&hsd1);
+        wait_count++;
+    }
+    
+    if (card_state == HAL_SD_CARD_TRANSFER) {
+        LOG_INFO("[SDStorage] ✅ SD card reached TRANSFER state successfully");
+        
+        // SDMMC 에러 코드 상세 체크
+        if (hsd1.ErrorCode != HAL_SD_ERROR_NONE) {
+            LOG_WARN("[SDStorage] SDMMC ErrorCode detected: 0x%08X", hsd1.ErrorCode);
+            
+            if (hsd1.ErrorCode & SDMMC_ERROR_TX_UNDERRUN) {
+                LOG_WARN("[SDStorage] TX_UNDERRUN detected - clock may be too fast");
+            }
+            if (hsd1.ErrorCode & SDMMC_ERROR_DATA_CRC_FAIL) {
+                LOG_WARN("[SDStorage] CRC_FAIL detected - cache issue possible");
+                SCB_CleanInvalidateDCache();
+            }
+            
+            // 에러 코드 클리어
+            hsd1.ErrorCode = HAL_SD_ERROR_NONE;
+        }
+        
+        // disk_initialize 호출
+        DSTATUS disk_status = disk_initialize(0);
+        LOG_INFO("[SDStorage] disk_initialize result: 0x%02X", disk_status);
+        
+        if (disk_status != 0) {
+            LOG_ERROR("[SDStorage] disk_initialize failed - SD card not ready");
+            LOG_ERROR("[SDStorage] Possible causes: write-protected, bad card, or BSP/HAL conflict");
+            return SDSTORAGE_ERROR;
+        }
+        
+        return SDSTORAGE_OK;
+    } else {
+        LOG_ERROR("[SDStorage] ❌ SD card failed to reach TRANSFER state (state: %d)", card_state);
+        LOG_ERROR("[SDStorage] SDMMC ErrorCode: 0x%08X", hsd1.ErrorCode);
+        return SDSTORAGE_ERROR;
+    }
+#else
+    return SDSTORAGE_OK;  // PC 환경에서는 성공으로 처리
+#endif
+}
+
+// 파일시스템 마운트 (재시도 로직 포함)
+static int _mount_filesystem_with_retry(void)
+{
+#ifdef STM32F746xx
+    // SD 카드 안정화 대기
+    LOG_INFO("[SDStorage] Waiting for SD card stabilization (%dms)...", SD_CARD_STABILIZE_DELAY_MS);
+    HAL_Delay(SD_CARD_STABILIZE_DELAY_MS);
+    
+    // f_mount 여러 번 재시도
+    LOG_INFO("[SDStorage] Attempting f_mount with retry logic...");
+    FRESULT mount_result = FR_DISK_ERR;
+    
+    for (int retry = 0; retry < SD_MOUNT_RETRY_COUNT; retry++) {
+        LOG_INFO("[SDStorage] f_mount attempt %d/%d...", retry + 1, SD_MOUNT_RETRY_COUNT);
+        mount_result = f_mount(&SDFatFS, SDPath, 1);  // 즉시 마운트
+        LOG_INFO("[SDStorage] f_mount result: %d", mount_result);
+        
+        if (mount_result == FR_OK) {
+            LOG_INFO("[SDStorage] ✅ f_mount successful on attempt %d", retry + 1);
+            return SDSTORAGE_OK;
+        } else {
+            LOG_WARN("[SDStorage] f_mount failed on attempt %d, retrying in %dms...", retry + 1, SD_MOUNT_RETRY_DELAY_MS);
+            if (retry < SD_MOUNT_RETRY_COUNT - 1) {  // 마지막 시도가 아니면 대기
+                // STM32F7 D-Cache 클리어
+                LOG_INFO("[SDStorage] Clearing D-Cache for STM32F7 compatibility...");
+                SCB_CleanInvalidateDCache();
+                HAL_Delay(SD_MOUNT_RETRY_DELAY_MS);
+            }
+        }
+    }
+    
+    // 모든 재시도 실패 시 추가 복구 시도
+    if (mount_result != FR_OK) {
+        LOG_WARN("[SDStorage] f_mount failed with result: %d", mount_result);
+        
+        if (mount_result == FR_DISK_ERR) {
+            LOG_WARN("[SDStorage] FR_DISK_ERR detected - trying deferred mount...");
+            mount_result = f_mount(&SDFatFS, SDPath, 0);
+            LOG_INFO("[SDStorage] Deferred mount result: %d", mount_result);
+            
+            if (mount_result == FR_OK) {
+                LOG_INFO("[SDStorage] Deferred mount successful!");
+                return SDSTORAGE_OK;
+            }
+        }
+        else if (mount_result == FR_NOT_READY || mount_result == FR_NO_FILESYSTEM) {
+            // 파일시스템 생성 시도
+            static BYTE work[_MAX_SS];
+            LOG_INFO("[SDStorage] Attempting to create filesystem with f_mkfs...");
+            FRESULT mkfs_result = f_mkfs(SDPath, FM_ANY, 0, work, sizeof(work));
+            LOG_INFO("[SDStorage] f_mkfs(FM_ANY) result: %d", mkfs_result);
+            
+            if (mkfs_result != FR_OK) {
+                mkfs_result = f_mkfs(SDPath, FM_FAT32, 4096, work, sizeof(work));
+                LOG_INFO("[SDStorage] f_mkfs(FM_FAT32) result: %d", mkfs_result);
+            }
+            
+            if (mkfs_result == FR_OK) {
+                // 파일시스템 생성 후 재마운트
+                mount_result = f_mount(&SDFatFS, SDPath, 1);
+                LOG_INFO("[SDStorage] Re-mount after mkfs result: %d", mount_result);
+                
+                if (mount_result == FR_OK) {
+                    return SDSTORAGE_OK;
+                }
+            }
+        }
+        
+        LOG_ERROR("[SDStorage] All mount attempts failed");
+        return SDSTORAGE_ERROR;
+    }
+    
+    return SDSTORAGE_OK;
+#else
+    return SDSTORAGE_OK;  // PC 환경에서는 성공으로 처리
+#endif
+}

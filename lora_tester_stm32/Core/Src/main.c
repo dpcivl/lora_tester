@@ -187,6 +187,14 @@ void StartReceiveTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
 
+// Helper functions for StartDefaultTask (거대 함수 분할)
+static int _initialize_sd_card_and_test(void);
+static int _setup_lora_uart_connection(void);
+static void _initialize_lora_context(LoraStarterContext* lora_ctx);
+static void _configure_logging_mode(int sd_result);
+static void _run_lora_process_loop(LoraStarterContext* lora_ctx);
+static void _enter_idle_loop(void);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -1771,6 +1779,226 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE END 4 */
 
+// Helper function implementations for StartDefaultTask
+
+/**
+ * @brief SD 카드 초기화 및 기본 기능 테스트
+ * @return SD 초기화 결과 (SDSTORAGE_OK: 성공, 기타: 실패)
+ */
+static int _initialize_sd_card_and_test(void)
+{
+    LOG_INFO("📤 [TX_TASK] Starting SD card basic functionality test...");
+    
+    // SD 초기화 시도
+    LOG_INFO("📤 [TX_TASK] Attempting SD card initialization...");
+    int sd_result = SDStorage_Init();
+    
+    if (sd_result == SDSTORAGE_OK) {
+        LOG_INFO("✅ [TX_TASK] SD card initialization SUCCESS");
+        
+        // 기본 쓰기 테스트
+        LOG_INFO("📤 [TX_TASK] Testing SD card write operation...");
+        const char* test_message = "SD Card Test - Hello World from FreeRTOS!\n";
+        int write_result = SDStorage_WriteLog(test_message, strlen(test_message));
+        
+        if (write_result == SDSTORAGE_OK) {
+            LOG_INFO("✅ [TX_TASK] SD card write operation SUCCESS");
+            LOG_INFO("🎉 [TX_TASK] SD card functionality confirmed - ready for long-term logging");
+        } else {
+            LOG_ERROR("❌ [TX_TASK] SD card write operation FAILED (code: %d)", write_result);
+        }
+    } else {
+        LOG_ERROR("❌ [TX_TASK] SD card initialization FAILED (code: %d)", sd_result);
+        LOG_INFO("📺 [TX_TASK] Continuing with terminal-only logging");
+    }
+    
+    return sd_result;
+}
+
+/**
+ * @brief LoRa UART 연결 설정
+ * @return UART 연결 결과 (UART_STATUS_OK: 성공, 기타: 실패)
+ */
+static int _setup_lora_uart_connection(void)
+{
+    LOG_INFO("📤 [TX_TASK] Connecting to UART for LoRa communication...");
+    UartStatus uart_status = UART_Connect("UART6");
+    
+    if (uart_status == UART_STATUS_OK) {
+        LOG_INFO("✅ [TX_TASK] UART connection successful");
+    } else {
+        LOG_ERROR("❌ [TX_TASK] UART connection failed (status: %d)", uart_status);
+    }
+    
+    return uart_status;
+}
+
+/**
+ * @brief LoRa 컨텍스트 초기화
+ * @param lora_ctx LoRa 컨텍스트 포인터
+ */
+static void _initialize_lora_context(LoraStarterContext* lora_ctx)
+{
+    LOG_INFO("📤 [TX_TASK] Waiting for LoRa module boot-up (5 seconds - optimized for long-term test)...");
+    osDelay(5000); // 5초 대기 (장기 테스트를 위해 단축)
+    
+    // LoraStarter 컨텍스트 초기화 (TDD 검증된 기본 설정 사용)
+    LoraStarter_InitWithDefaults(lora_ctx, "TEST");
+    
+    LOG_INFO("=== LoRa Initialization ===");
+    LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
+             lora_ctx->num_commands, lora_ctx->send_message, lora_ctx->max_retry_count);
+}
+
+/**
+ * @brief SD 초기화 결과에 따른 로깅 모드 설정
+ * @param sd_result SD 초기화 결과
+ */
+static void _configure_logging_mode(int sd_result)
+{
+    // SD 카드 로깅 설정 (간단한 방식)
+    if (sd_result == SDSTORAGE_OK) {
+        LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
+        
+        // LoRa 로깅 모드 설정 - 초기화 단계에서는 터미널만 사용
+        LOGGER_SetMode(LOGGER_MODE_DUAL);  // 터미널 + SD 동시 출력
+        LOGGER_SetFilterLevel(LOG_LEVEL_INFO);  // 터미널에서 모든 로그 확인 가능
+        LOGGER_SetSDFilterLevel(LOG_LEVEL_WARN);  // SD 카드에는 WARN 이상만 저장
+        LOGGER_EnableSDLogging(false);  // 초기화 완료 전까지 SD 로깅 비활성화
+        LOG_WARN("✅ LoRa logging mode: DUAL (Terminal + SD), SD logging will start from JOIN attempts");
+    } else {
+        LOG_INFO("📺 LoRa logs will be displayed on terminal only (SD not available)");
+        
+        LOGGER_SetMode(LOGGER_MODE_TERMINAL_ONLY);
+        LOGGER_SetFilterLevel(LOG_LEVEL_INFO);
+        LOG_INFO("📺 LoRa logging mode: Terminal only");
+    }
+}
+
+/**
+ * @brief LoRa 프로세스 메인 루프 실행
+ * @param lora_ctx LoRa 컨텍스트 포인터
+ */
+static void _run_lora_process_loop(LoraStarterContext* lora_ctx)
+{
+    LOG_INFO("📤 [TX_TASK] Starting LoRa process loop...");
+    
+    for(;;)
+    {
+        // 수신된 응답이 있으면 LoraStarter에 전달
+        const char* rx_data = NULL;
+        if (lora_new_response) {
+            rx_data = lora_rx_response;
+            lora_new_response = false; // 플래그 클리어
+            // 응답 처리 - 로그는 ResponseHandler에서 이미 출력됨
+        }
+        
+        // LoraStarter 프로세스 실행
+        LoraStarter_Process(lora_ctx, rx_data);
+        
+        // JOIN 성공 후 시간 조회는 LoRa 상태 머신에서 자동 처리됨 (TIMEREQ → LTIME)
+        
+        // 상태별 처리 간격 및 디버깅 (중요한 상태만)
+        static int last_state = -1;
+        if (lora_ctx->state != last_state) {
+            // JOIN, SEND, ERROR 등 중요한 상태 변경만 로그 출력
+            if (lora_ctx->state == LORA_STATE_SEND_JOIN || 
+                lora_ctx->state == LORA_STATE_SEND_PERIODIC ||
+                lora_ctx->state == LORA_STATE_DONE ||
+                lora_ctx->state == LORA_STATE_ERROR) {
+                LOG_INFO("[TX_TASK] ⚙️ LoRa State: %d, cmd_index: %d/%d", 
+                          lora_ctx->state, lora_ctx->cmd_index, lora_ctx->num_commands);
+            }
+            last_state = lora_ctx->state;
+        }
+        
+        switch(lora_ctx->state) {
+            case LORA_STATE_INIT:
+                osDelay(500); // 초기화 상태는 빠르게
+                break;
+            case LORA_STATE_SEND_CMD:
+                LOG_INFO("[TX_TASK] 📤 Sending command %d/%d", 
+                        lora_ctx->cmd_index + 1, lora_ctx->num_commands);
+                osDelay(1000); // 명령어 전송 후 1초 대기
+                break;
+            case LORA_STATE_WAIT_OK:
+                // OK 응답 대기 중 - 조용히 대기
+                osDelay(2000); // OK 응답 대기 중 2초 간격
+                break;
+            case LORA_STATE_SEND_JOIN:
+                // JOIN 시도 시작 - SD 로깅 활성화 (영구적)
+                if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
+                    LOGGER_EnableSDLogging(true);
+                    LOG_WARN("🗂️ SD logging enabled from JOIN attempts (WARN+ levels only)");
+                }
+                osDelay(2000); // JOIN 명령어 전송 후 2초 대기
+                break;
+            case LORA_STATE_WAIT_JOIN_OK:
+                // JOIN 성공 확인 시 SD 로깅 영구 활성화 보장
+                if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
+                    LOGGER_EnableSDLogging(true);
+                    LOG_WARN("🗂️ SD logging permanently enabled after JOIN success");
+                }
+                osDelay(3000); // JOIN 응답 대기 중 3초 간격
+                break;
+            case LORA_STATE_SEND_TIMEREQ:
+                osDelay(1000); // TIMEREQ 명령어 전송 후 1초 대기
+                break;
+            case LORA_STATE_SEND_LTIME:
+                osDelay(1000); // LTIME 명령어 전송 후 1초 대기
+                break;
+            case LORA_STATE_SEND_PERIODIC:
+                // 주기적 SEND 시 SD 로깅 상태 확인 및 활성화
+                if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
+                    LOGGER_EnableSDLogging(true);
+                    LOG_WARN("🗂️ SD logging re-enabled for periodic SEND");
+                }
+                osDelay(2000); // SEND 명령어 전송 후 2초 대기
+                break;
+            case LORA_STATE_WAIT_TIMEREQ_OK:
+            case LORA_STATE_WAIT_LTIME_RESPONSE:
+            case LORA_STATE_WAIT_SEND_RESPONSE:
+                osDelay(3000); // 응답 대기 중 3초 간격
+                break;
+            case LORA_STATE_WAIT_TIME_SYNC:
+                osDelay(1000); // 시간 동기화 대기 중 1초 간격으로 체크
+                break;
+            case LORA_STATE_WAIT_SEND_INTERVAL:
+                // 주기적 전송 대기 중 - 로그 출력 없이 조용히 대기
+                osDelay(5000); // 주기적 전송 대기 중 5초 간격으로 체크
+                break;
+            case LORA_STATE_JOIN_RETRY:
+                osDelay(5000); // 재시도 대기 5초
+                break;
+            case LORA_STATE_DONE:
+            case LORA_STATE_ERROR:
+                LOG_INFO("📤 [TX_TASK] LoRa process completed with state: %s", 
+                        lora_ctx->state == LORA_STATE_DONE ? "DONE" : "ERROR");
+                return; // 루프 종료하고 idle로 이동
+            default:
+                osDelay(1000);
+                break;
+        }
+    }
+}
+
+/**
+ * @brief Idle 모드 진입 및 처리
+ */
+static void _enter_idle_loop(void)
+{
+    LOG_INFO("📤 [TX_TASK] Entering idle mode...");
+    uint32_t idle_counter = 0;
+    
+    for(;;)
+    {
+        // 30초마다 idle 상태 표시
+        osDelay(30000);
+        idle_counter++;
+        LOG_INFO("📤 [TX_TASK] Idle mode: %lu minutes elapsed", idle_counter / 2);
+    }
+}
+
 /* USER CODE BEGIN Header_StartDefaultTask */
 /**
   * @brief  Function implementing the defaultTask thread.
@@ -1795,190 +2023,29 @@ void StartDefaultTask(void const * argument)
   LOG_INFO("📌 CRITICAL: For loopback test, connect PC6(TX) to PC7(RX) with a wire!");
   LOG_INFO("📌 UART6 Pins: PC6(TX) = Arduino D1, PC7(RX) = Arduino D0");
   
-  // SD 카드 기본 기능 테스트 (Default Task에서 수행)
-  LOG_INFO("📤 [TX_TASK] Starting SD card basic functionality test...");
+  // 1. SD 카드 초기화 및 기본 기능 테스트
+  g_sd_initialization_result = _initialize_sd_card_and_test();
   
-  // SD 초기화 시도
-  LOG_INFO("📤 [TX_TASK] Attempting SD card initialization...");
-  g_sd_initialization_result = SDStorage_Init();
-  
-  if (g_sd_initialization_result == SDSTORAGE_OK) {
-    LOG_INFO("✅ [TX_TASK] SD card initialization SUCCESS");
-    
-    // 기본 쓰기 테스트
-    LOG_INFO("📤 [TX_TASK] Testing SD card write operation...");
-    const char* test_message = "SD Card Test - Hello World from FreeRTOS!\n";
-    int write_result = SDStorage_WriteLog(test_message, strlen(test_message));
-    
-    if (write_result == SDSTORAGE_OK) {
-      LOG_INFO("✅ [TX_TASK] SD card write operation SUCCESS");
-      LOG_INFO("🎉 [TX_TASK] SD card functionality confirmed - ready for long-term logging");
-    } else {
-      LOG_ERROR("❌ [TX_TASK] SD card write operation FAILED (code: %d)", write_result);
-    }
-  } else {
-    LOG_ERROR("❌ [TX_TASK] SD card initialization FAILED (code: %d)", g_sd_initialization_result);
-    LOG_INFO("📺 [TX_TASK] Continuing with terminal-only logging");
-  }
-
-  // SD 테스트 건너뛰고 바로 LoRa 시작
-  
+  // 2. LoRa UART 연결 설정
   LOG_INFO("📤 [TX_TASK] Starting LoRa initialization and JOIN...");
-  
-  // UART 연결 (LoRa 통신을 위해 필수)
-  LOG_INFO("📤 [TX_TASK] Connecting to UART for LoRa communication...");
-  UartStatus uart_status = UART_Connect("UART6");
-  if (uart_status == UART_STATUS_OK) {
-    LOG_INFO("✅ [TX_TASK] UART connection successful");
-  } else {
-    LOG_ERROR("❌ [TX_TASK] UART connection failed (status: %d)", uart_status);
+  int uart_result = _setup_lora_uart_connection();
+  if (uart_result != UART_STATUS_OK) {
+    LOG_ERROR("❌ [TX_TASK] UART setup failed, continuing anyway...");
   }
   
-  LOG_INFO("📤 [TX_TASK] Waiting for LoRa module boot-up (5 seconds - optimized for long-term test)...");
-  osDelay(5000); // 5초 대기 (장기 테스트를 위해 단축)
-  
-  // LoraStarter 컨텍스트 초기화 (TDD 검증된 기본 설정 사용)
+  // 3. LoRa 컨텍스트 초기화
   LoraStarterContext lora_ctx;
-  LoraStarter_InitWithDefaults(&lora_ctx, "TEST");
+  _initialize_lora_context(&lora_ctx);
   
-  LOG_INFO("=== LoRa Initialization ===");
-  LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
-           lora_ctx.num_commands, lora_ctx.send_message, lora_ctx.max_retry_count);
-           
-  // SD 카드 로깅 설정 (간단한 방식)
-  extern int g_sd_initialization_result; // main()에서 설정된 SD 결과
-  if (g_sd_initialization_result == SDSTORAGE_OK) {
-    LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
-  } else {
-    LOG_INFO("📺 LoRa logs will be displayed on terminal only (SD not available)");
-  }
+  // 4. 로깅 모드 설정
+  _configure_logging_mode(g_sd_initialization_result);
   
-  // LoRa 로깅 모드 설정 - 초기화 단계에서는 터미널만 사용
-  if (g_sd_initialization_result == SDSTORAGE_OK) {
-    LOGGER_SetMode(LOGGER_MODE_DUAL);  // 터미널 + SD 동시 출력
-    LOGGER_SetFilterLevel(LOG_LEVEL_INFO);  // 터미널에서 모든 로그 확인 가능
-    LOGGER_SetSDFilterLevel(LOG_LEVEL_WARN);  // SD 카드에는 WARN 이상만 저장
-    LOGGER_EnableSDLogging(false);  // 초기화 완료 전까지 SD 로깅 비활성화
-    LOG_WARN("✅ LoRa logging mode: DUAL (Terminal + SD), SD logging will start from JOIN attempts");
-  } else {
-    LOGGER_SetMode(LOGGER_MODE_TERMINAL_ONLY);
-    LOGGER_SetFilterLevel(LOG_LEVEL_INFO);
-    LOG_INFO("📺 LoRa logging mode: Terminal only");
-  }
+  // 5. LoRa 프로세스 메인 루프 실행
+  _run_lora_process_loop(&lora_ctx);
   
-  // LoRa 프로세스 루프 (초기화 → JOIN → 주기적 전송)
-  LOG_INFO("📤 [TX_TASK] Starting LoRa process loop...");
+  // 6. Idle 모드 진입
+  _enter_idle_loop();
   
-  for(;;)
-  {
-    // 수신된 응답이 있으면 LoraStarter에 전달
-    const char* rx_data = NULL;
-    if (lora_new_response) {
-      rx_data = lora_rx_response;
-      lora_new_response = false; // 플래그 클리어
-      // 응답 처리 - 로그는 ResponseHandler에서 이미 출력됨
-    }
-    
-    // LoraStarter 프로세스 실행
-    LoraStarter_Process(&lora_ctx, rx_data);
-    
-    // JOIN 성공 후 시간 조회는 LoRa 상태 머신에서 자동 처리됨 (TIMEREQ → LTIME)
-    
-    // 상태별 처리 간격 및 디버깅 (중요한 상태만)
-    static int last_state = -1;
-    if (lora_ctx.state != last_state) {
-      // JOIN, SEND, ERROR 등 중요한 상태 변경만 로그 출력
-      if (lora_ctx.state == LORA_STATE_SEND_JOIN || 
-          lora_ctx.state == LORA_STATE_SEND_PERIODIC ||
-          lora_ctx.state == LORA_STATE_DONE ||
-          lora_ctx.state == LORA_STATE_ERROR) {
-        LOG_INFO("[TX_TASK] ⚙️ LoRa State: %d, cmd_index: %d/%d", 
-                  lora_ctx.state, lora_ctx.cmd_index, lora_ctx.num_commands);
-      }
-      last_state = lora_ctx.state;
-    }
-    
-    switch(lora_ctx.state) {
-      case LORA_STATE_INIT:
-        osDelay(500); // 초기화 상태는 빠르게
-        break;
-      case LORA_STATE_SEND_CMD:
-        LOG_INFO("[TX_TASK] 📤 Sending command %d/%d", 
-                lora_ctx.cmd_index + 1, lora_ctx.num_commands);
-        osDelay(1000); // 명령어 전송 후 1초 대기
-        break;
-      case LORA_STATE_WAIT_OK:
-        // OK 응답 대기 중 - 조용히 대기
-        osDelay(2000); // OK 응답 대기 중 2초 간격
-        break;
-      case LORA_STATE_SEND_JOIN:
-        // JOIN 시도 시작 - SD 로깅 활성화 (영구적)
-        if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
-          LOGGER_EnableSDLogging(true);
-          LOG_WARN("🗂️ SD logging enabled from JOIN attempts (WARN+ levels only)");
-        }
-        osDelay(2000); // JOIN 명령어 전송 후 2초 대기
-        break;
-      case LORA_STATE_WAIT_JOIN_OK:
-        // JOIN 성공 확인 시 SD 로깅 영구 활성화 보장
-        if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
-          LOGGER_EnableSDLogging(true);
-          LOG_WARN("🗂️ SD logging permanently enabled after JOIN success");
-        }
-        osDelay(3000); // JOIN 응답 대기 중 3초 간격
-        break;
-      case LORA_STATE_SEND_TIMEREQ:
-        osDelay(1000); // TIMEREQ 명령어 전송 후 1초 대기
-        break;
-      case LORA_STATE_SEND_LTIME:
-        osDelay(1000); // LTIME 명령어 전송 후 1초 대기
-        break;
-      case LORA_STATE_SEND_PERIODIC:
-        // 주기적 SEND 시 SD 로깅 상태 확인 및 활성화
-        if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
-          LOGGER_EnableSDLogging(true);
-          LOG_WARN("🗂️ SD logging re-enabled for periodic SEND");
-        }
-        osDelay(2000); // SEND 명령어 전송 후 2초 대기
-        break;
-      case LORA_STATE_WAIT_TIMEREQ_OK:
-      case LORA_STATE_WAIT_LTIME_RESPONSE:
-      case LORA_STATE_WAIT_SEND_RESPONSE:
-        osDelay(3000); // 응답 대기 중 3초 간격
-        break;
-      case LORA_STATE_WAIT_TIME_SYNC:
-        osDelay(1000); // 시간 동기화 대기 중 1초 간격으로 체크
-        break;
-      case LORA_STATE_WAIT_SEND_INTERVAL:
-        // 주기적 전송 대기 중 - 로그 출력 없이 조용히 대기
-        osDelay(5000); // 주기적 전송 대기 중 5초 간격으로 체크
-        break;
-      case LORA_STATE_JOIN_RETRY:
-        osDelay(5000); // 재시도 대기 5초
-        break;
-      case LORA_STATE_DONE:
-      case LORA_STATE_ERROR:
-        LOG_INFO("📤 [TX_TASK] LoRa process completed with state: %s", 
-                lora_ctx.state == LORA_STATE_DONE ? "DONE" : "ERROR");
-        goto idle_loop;
-      default:
-        osDelay(1000);
-        break;
-    }
-  }
-
-idle_loop:
-  /* Infinite idle loop */
-  LOG_INFO("📤 [TX_TASK] Entering idle mode...");
-  uint32_t idle_counter = 0;
-  
-  for(;;)
-  {
-    // 30초마다 idle 상태 표시
-    osDelay(30000);
-    idle_counter++;
-    LOG_INFO("📤 [TX_TASK] Idle mode: %lu minutes elapsed", idle_counter / 2);
-  }
   /* USER CODE END 5 */
 }
 
