@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "error_codes.h"
 
 // 로깅 레벨 정의
 typedef enum {
@@ -20,12 +21,13 @@ typedef enum {
     LOG_LEVEL_ERROR = 3
 } LogLevel;
 
-// 로깅 상태
-typedef enum {
-    LOGGER_STATUS_OK = 0,
-    LOGGER_STATUS_ERROR = -1,
-    LOGGER_STATUS_TIMEOUT
-} LoggerStatus;
+// 로깅 상태 (새로운 에러 코드 시스템 사용)
+typedef ResultCode LoggerStatus;
+
+// 호환성을 위한 기존 상태 매핑 (deprecated)
+#define LOGGER_STATUS_OK       RESULT_SUCCESS
+#define LOGGER_STATUS_ERROR    RESULT_ERROR_LOGGER_SEND_FAILED
+#define LOGGER_STATUS_TIMEOUT  RESULT_ERROR_TIMEOUT
 
 // 로깅 설정
 typedef struct {

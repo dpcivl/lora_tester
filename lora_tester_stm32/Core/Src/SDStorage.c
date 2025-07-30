@@ -132,13 +132,13 @@ static void _close_persistent_file(void) {
 #endif
 
 // 내부 함수 선언
-static int _create_log_directory(void);
+static ResultCode _create_log_directory(void);
 static void _close_persistent_file(void);
-static int _initialize_sd_hardware(void);
-static int _mount_filesystem_with_retry(void);
+static ResultCode _initialize_sd_hardware(void);
+static ResultCode _mount_filesystem_with_retry(void);
 // static uint32_t _get_current_timestamp(void); - unused function removed
 
-int SDStorage_Init(void)
+ResultCode SDStorage_Init(void)
 {
     LOG_INFO("[SDStorage] Starting SD card initialization...");
     
@@ -146,13 +146,13 @@ int SDStorage_Init(void)
     _close_persistent_file();
     
     // 1. SD 하드웨어 초기화 및 상태 확인
-    int hw_result = _initialize_sd_hardware();
+    ResultCode hw_result = _initialize_sd_hardware();
     if (hw_result != SDSTORAGE_OK) {
         return hw_result;
     }
     
     // 2. 파일시스템 마운트 (재시도 로직 포함)
-    int mount_result = _mount_filesystem_with_retry();
+    ResultCode mount_result = _mount_filesystem_with_retry();
     if (mount_result != SDSTORAGE_OK) {
         return mount_result;
     }
@@ -161,7 +161,7 @@ int SDStorage_Init(void)
     
     // 3. 디렉토리 생성 시도
     LOG_INFO("[SDStorage] Creating log directory...");
-    int dir_result = _create_log_directory();
+    ResultCode dir_result = _create_log_directory();
     g_directory_available = (dir_result == SDSTORAGE_OK);
     
     // 4. 최종 상태 설정
@@ -182,7 +182,7 @@ int SDStorage_Init(void)
     return SDSTORAGE_OK;
 }
 
-int SDStorage_WriteLog(const void* data, size_t size)
+ResultCode SDStorage_WriteLog(const void* data, size_t size)
 {
     if (!g_sd_ready) {
         return SDSTORAGE_NOT_READY;
@@ -271,7 +271,7 @@ void SDStorage_Disconnect(void)
     }
 }
 
-int SDStorage_CreateNewLogFile(void)
+ResultCode SDStorage_CreateNewLogFile(void)
 {
     if (!g_sd_ready) {
         return SDSTORAGE_NOT_READY;
@@ -342,7 +342,7 @@ size_t SDStorage_GetCurrentLogSize(void)
 }
 
 // 내부 함수 구현
-static int _create_log_directory(void)
+static ResultCode _create_log_directory(void)
 {
 #ifdef STM32F746xx
     // FatFs가 이미 정상 동작하므로 HAL 테스트 불필요
@@ -381,7 +381,7 @@ static int _create_log_directory(void)
 }
 
 // SD 하드웨어 초기화 및 상태 확인
-static int _initialize_sd_hardware(void)
+static ResultCode _initialize_sd_hardware(void)
 {
 #ifdef STM32F746xx
     extern SD_HandleTypeDef hsd1;
@@ -438,7 +438,7 @@ static int _initialize_sd_hardware(void)
 }
 
 // 파일시스템 마운트 (재시도 로직 포함)
-static int _mount_filesystem_with_retry(void)
+static ResultCode _mount_filesystem_with_retry(void)
 {
 #ifdef STM32F746xx
     // SD 카드 안정화 대기

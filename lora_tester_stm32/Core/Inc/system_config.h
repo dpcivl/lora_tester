@@ -2,10 +2,13 @@
  * @file system_config.h
  * @brief 시스템 전체 설정값 중앙 관리
  * @date 2025-07-30
+ * @note Phase 3: 통일된 에러 코드 시스템 포함
  */
 
 #ifndef SYSTEM_CONFIG_H
 #define SYSTEM_CONFIG_H
+
+#include "error_codes.h"
 
 // =============================================================================
 // LoRa 통신 설정

@@ -1,0 +1,2 @@
+../Core/Inc/error_codes.h:126:20:ErrorCode_IsModuleError	3
+../Core/Src/error_codes.c:16:13:ErrorCode_ToString	58

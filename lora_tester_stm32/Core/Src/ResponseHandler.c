@@ -68,7 +68,7 @@ bool is_join_response_ok(const char* response)
     bool result = (strcmp(clean_response, "+EVT:JOINED") == 0);
     
     if (result) {
-        LOG_INFO("✅ JOIN CONFIRMED - Network joined successfully");
+        LOG_WARN("✅ JOIN CONFIRMED - Network joined successfully");
         
         // JOIN 성공 후 시간 조회 요청 (네트워크 동기화 대기 후)
         LOG_INFO("[ResponseHandler] Requesting network time after JOIN success...");

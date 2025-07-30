@@ -10,13 +10,15 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "error_codes.h"
 
-// UART 연결 상태
-typedef enum {
-    UART_STATUS_OK,
-    UART_STATUS_ERROR,
-    UART_STATUS_TIMEOUT
-} UartStatus;
+// UART 연결 상태 (새로운 에러 코드 시스템 사용)
+typedef ResultCode UartStatus;
+
+// 호환성을 위한 기존 상태 매핑 (deprecated)
+#define UART_STATUS_OK       RESULT_SUCCESS
+#define UART_STATUS_ERROR    RESULT_ERROR_UART_CONNECTION
+#define UART_STATUS_TIMEOUT  RESULT_ERROR_TIMEOUT
 
 // UART 설정 구조체
 typedef struct {
