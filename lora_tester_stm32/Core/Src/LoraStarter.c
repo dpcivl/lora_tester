@@ -123,13 +123,13 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
             }
             break;
         case LORA_STATE_SEND_JOIN:
-            LORA_LOG_JOIN_ATTEMPT();
+            LOG_INFO("[LoRa] 🌐 JOIN ATTEMPT started");
             CommandSender_Send("AT+JOIN\r\n");
             ctx->state = LORA_STATE_WAIT_JOIN_OK;
             break;
         case LORA_STATE_WAIT_JOIN_OK:
             if (uart_rx && is_join_response_ok(uart_rx)) {
-                LORA_LOG_JOIN_SUCCESS();
+                // JOIN SUCCESS는 ResponseHandler에서 이미 로그 출력됨
                 ctx->state = LORA_STATE_SEND_TIMEREQ; // JOIN 후 시간 동기화 활성화로 전환
                 ctx->send_count = 0;
                 ctx->error_count = 0; // JOIN 성공 시 에러 카운터 리셋
@@ -188,7 +188,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                         LOG_WARN("[LoRa] 🚀 PERIODIC SEND STARTED with message: %s", ctx->send_message);
                     } else {
                         // 주기적 전송 전 시간 조회 완료 - SEND 실행
-                        LOG_WARN("[LoRa] 🕐 Time synchronized, proceeding to SEND");
+                        LOG_INFO("[LoRa] 🕐 Time synchronized, proceeding to SEND");
                         ctx->state = LORA_STATE_SEND_PERIODIC;
                         // 시간은 다음 전송 후에 저장됨
                     }
@@ -213,7 +213,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 hex_data[len*2] = '\0';
                 
                 snprintf(send_cmd, sizeof(send_cmd), "AT+SEND=1:%s\r\n", hex_data);
-                LORA_LOG_SEND_ATTEMPT(message);
+                LOG_WARN("[LoRa] 📤 SEND ATTEMPT: %s", message);
                 CommandSender_Send(send_cmd);
                 ctx->state = LORA_STATE_WAIT_SEND_RESPONSE;
                 ctx->send_count++;
@@ -225,7 +225,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 ResponseType response_type = ResponseHandler_ParseSendResponse(uart_rx);
                 switch(response_type) {
                     case RESPONSE_OK:
-                        LORA_LOG_SEND_SUCCESS();
+                        // SEND SUCCESS는 ResponseHandler에서 이미 로그 출력됨
                         // SEND 성공 후 다음 전송 대기 상태로 전환
                         ctx->state = LORA_STATE_WAIT_SEND_INTERVAL;
                         ctx->error_count = 0; // 성공 시 에러 카운터 리셋

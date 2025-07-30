@@ -2141,7 +2141,7 @@ void StartReceiveTask(void const * argument)
       
       // 기본적인 응답 타입 체크 (ResponseHandler에서 상세 로그 출력)
       if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
-        LOG_WARN("✅ JOIN CONFIRMED - Network joined successfully");
+        LOG_INFO("✅ JOIN CONFIRMED - Network joined successfully");
         g_join_success_time = HAL_GetTick();  // JOIN 성공 시간 기록
       } else if (strstr(local_buffer, "RAKwireless") != NULL) {
         LOG_DEBUG("📡 LoRa module boot message (ignored)");

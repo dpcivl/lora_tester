@@ -81,21 +81,9 @@ int LOGGER_SendToSDAsync(const char* message, size_t length);
 #define LOG_ERROR(fmt, ...) \
     LOGGER_SendFormatted(LOG_LEVEL_ERROR, fmt, ##__VA_ARGS__)
 
-// LoRa 전용 로깅 매크로들
-#define LORA_LOG_JOIN_ATTEMPT() \
-    LOG_WARN("[LoRa] 🌐 JOIN ATTEMPT started")
-
-#define LORA_LOG_JOIN_SUCCESS() \
-    LOG_WARN("[LoRa] ✅ JOIN SUCCESSFUL")
-
+// LoRa 전용 로깅 매크로들 (간소화됨)
 #define LORA_LOG_JOIN_FAILED(reason) \
     LOG_WARN("[LoRa] JOIN failed: %s", reason)
-
-#define LORA_LOG_SEND_ATTEMPT(message) \
-    LOG_WARN("[LoRa] 📤 SEND ATTEMPT: %s", message)
-
-#define LORA_LOG_SEND_SUCCESS() \
-    LOG_WARN("[LoRa] ✅ SEND SUCCESSFUL")
 
 #define LORA_LOG_SEND_FAILED(reason) \
     LOG_WARN("[LoRa] SEND failed: %s", reason)

@@ -68,8 +68,7 @@ bool is_join_response_ok(const char* response)
     bool result = (strcmp(clean_response, "+EVT:JOINED") == 0);
     
     if (result) {
-        LOG_WARN("[ResponseHandler] ✅ JOIN SUCCESS: %s", response);
-        LOG_WARN("[LoRa] 🌐 Network joined successfully - SD logging active");
+        LOG_INFO("✅ JOIN CONFIRMED - Network joined successfully");
         
         // JOIN 성공 후 시간 조회 요청 (네트워크 동기화 대기 후)
         LOG_INFO("[ResponseHandler] Requesting network time after JOIN success...");
@@ -91,7 +90,7 @@ ResponseType ResponseHandler_ParseSendResponse(const char* response)
     LOG_DEBUG("[ResponseHandler] Parsing SEND response: '%s'", response);
     
     if (strstr(response, "+EVT:SEND_CONFIRMED_OK") != NULL) {
-        LOG_WARN("[ResponseHandler] ✅ SEND SUCCESS: CONFIRMED_OK");
+        LOG_WARN("✅ SEND SUCCESS - Data transmitted successfully");
         return RESPONSE_OK;
     }
     if (strstr(response, "+EVT:SEND_CONFIRMED_FAILED") != NULL) {
@@ -199,8 +198,7 @@ void ResponseHandler_ParseTimeResponse(const char* response)
         
         g_time_synchronized = true;
         
-        LOG_WARN("[LoRa] 🕐 Network time synchronized (KST): %s", g_network_time);
-        LOG_WARN("[TIMESTAMP] Korean time: %s", g_network_time);
+        LOG_INFO("[LoRa] 🕐 Network time synchronized (KST): %s", g_network_time);
     }
 }
 
