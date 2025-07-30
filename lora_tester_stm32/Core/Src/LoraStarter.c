@@ -58,7 +58,7 @@ void LoraStarter_InitWithDefaults(LoraStarterContext* ctx, const char* send_mess
     ctx->commands = LORA_DEFAULT_INIT_COMMANDS;
     ctx->num_commands = LORA_DEFAULT_INIT_COMMANDS_COUNT;
     ctx->send_message = (send_message != NULL) ? send_message : "TEST";
-    ctx->max_retry_count = 3;
+    ctx->max_retry_count = 0;  // 0 = 무제한 재시도
     ctx->send_interval_ms = 300000;  // 5분 간격
     ctx->last_send_time = 0;
     ctx->send_count = 0;
@@ -203,17 +203,27 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
             {
                 char send_cmd[128];
                 char hex_data[64];
-                const char* message = (ctx->send_message != NULL) ? ctx->send_message : "Hello";
+                char sequential_message[16];
+                
+                // 순차 번호 메시지 생성 (0001~9999)
+                static int message_number = 1;
+                snprintf(sequential_message, sizeof(sequential_message), "%04d", message_number);
+                
+                // 9999 다음에는 0001로 다시 시작
+                message_number++;
+                if (message_number > 9999) {
+                    message_number = 1;
+                }
                 
                 // 문자열을 헥사 문자열로 변환
-                int len = strlen(message);
+                int len = strlen(sequential_message);
                 for (int i = 0; i < len && i < 31; i++) {  // 최대 31자 (62 hex chars)
-                    sprintf(&hex_data[i*2], "%02X", (unsigned char)message[i]);
+                    sprintf(&hex_data[i*2], "%02X", (unsigned char)sequential_message[i]);
                 }
                 hex_data[len*2] = '\0';
                 
                 snprintf(send_cmd, sizeof(send_cmd), "AT+SEND=1:%s\r\n", hex_data);
-                LOG_WARN("[LoRa] 📤 SEND ATTEMPT: %s", message);
+                LOG_WARN("[LoRa] 📤 SEND ATTEMPT: %s", sequential_message);
                 CommandSender_Send(send_cmd);
                 ctx->state = LORA_STATE_WAIT_SEND_RESPONSE;
                 ctx->send_count++;
