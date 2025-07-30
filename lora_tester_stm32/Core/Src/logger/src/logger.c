@@ -126,7 +126,7 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
     if (level < filter_level) return;
     if (level < current_config.level) return;
     
-    char buffer[512];
+    char buffer[1024];  // 버퍼 크기 2배 증가 (512 → 1024)
     const char* level_str[] = {"[DEBUG]", "[INFO]", "[WARN]", "[ERROR]"};
     
     // 타임스탬프 + 레벨 문자열 추가
@@ -140,10 +140,14 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
         offset = snprintf(buffer, sizeof(buffer), "%s ", level_str[level]);
     }
     
-    // 가변 인수 처리
+    // 가변 인수 처리 (버퍼 오버플로우 방지)
     va_list args;
     va_start(args, format);
-    vsnprintf(buffer + offset, sizeof(buffer) - offset, format, args);
+    int remaining_size = sizeof(buffer) - offset;
+    if (remaining_size > 0) {
+        vsnprintf(buffer + offset, remaining_size, format, args);
+        buffer[sizeof(buffer) - 1] = '\0';  // 안전장치: 항상 null 종료
+    }
     va_end(args);
     
     // 모드에 따른 출력 처리
@@ -164,7 +168,29 @@ void LOGGER_SendFormatted(LogLevel level, const char* format, ...) {
             LOGGER_Platform_Send(buffer);
             // SD 출력 (SD 로깅 활성화 + SD 필터 레벨 체크 + 에러 무시)
             if (sd_logging_enabled && level >= sd_filter_level && SDStorage_IsReady()) {
-                SDStorage_WriteLog(buffer, strlen(buffer));
+                int sd_result = SDStorage_WriteLog(buffer, strlen(buffer));
+                if (sd_result != 0 && level >= LOG_LEVEL_WARN) {
+                    // SD 쓰기 실패 시 터미널에 에러 출력
+                    char error_msg[128];
+                    const char* error_desc;
+                    switch(sd_result) {
+                        case -1: error_desc = "GENERAL_ERROR"; break;
+                        case -2: error_desc = "NOT_READY"; break;
+                        case -3: error_desc = "FILE_ERROR"; break;
+                        case -4: error_desc = "DISK_FULL"; break;
+                        case -5: error_desc = "INVALID_PARAM"; break;
+                        default: error_desc = "UNKNOWN"; break;
+                    }
+                    snprintf(error_msg, sizeof(error_msg), "[SD_ERROR] Write failed: %d (%s)", sd_result, error_desc);
+                    LOGGER_Platform_Send(error_msg);
+                }
+            } else if (level >= LOG_LEVEL_WARN) {
+                // WARN 이상 레벨인데 SD에 저장되지 않는 경우 디버그 정보 출력
+                char debug_msg[256];
+                snprintf(debug_msg, sizeof(debug_msg), 
+                    "[SD_DEBUG] Skip SD write: enabled=%d, level=%d>=filter=%d, ready=%d",
+                    sd_logging_enabled, level, sd_filter_level, SDStorage_IsReady());
+                LOGGER_Platform_Send(debug_msg);
             }
             break;
     }

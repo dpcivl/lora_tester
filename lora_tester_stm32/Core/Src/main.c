@@ -1912,12 +1912,20 @@ void StartDefaultTask(void const * argument)
         osDelay(2000); // OK 응답 대기 중 2초 간격
         break;
       case LORA_STATE_SEND_JOIN:
-        // JOIN 시도 시작 - SD 로깅 활성화
+        // JOIN 시도 시작 - SD 로깅 활성화 (영구적)
         if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
           LOGGER_EnableSDLogging(true);
           LOG_WARN("🗂️ SD logging enabled from JOIN attempts (WARN+ levels only)");
         }
         osDelay(2000); // JOIN 명령어 전송 후 2초 대기
+        break;
+      case LORA_STATE_WAIT_JOIN_OK:
+        // JOIN 성공 확인 시 SD 로깅 영구 활성화 보장
+        if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
+          LOGGER_EnableSDLogging(true);
+          LOG_WARN("🗂️ SD logging permanently enabled after JOIN success");
+        }
+        osDelay(3000); // JOIN 응답 대기 중 3초 간격
         break;
       case LORA_STATE_SEND_TIMEREQ:
         osDelay(1000); // TIMEREQ 명령어 전송 후 1초 대기
@@ -1926,13 +1934,20 @@ void StartDefaultTask(void const * argument)
         osDelay(1000); // LTIME 명령어 전송 후 1초 대기
         break;
       case LORA_STATE_SEND_PERIODIC:
+        // 주기적 SEND 시 SD 로깅 상태 확인 및 활성화
+        if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
+          LOGGER_EnableSDLogging(true);
+          LOG_WARN("🗂️ SD logging re-enabled for periodic SEND");
+        }
         osDelay(2000); // SEND 명령어 전송 후 2초 대기
         break;
-      case LORA_STATE_WAIT_JOIN_OK:
       case LORA_STATE_WAIT_TIMEREQ_OK:
       case LORA_STATE_WAIT_LTIME_RESPONSE:
       case LORA_STATE_WAIT_SEND_RESPONSE:
         osDelay(3000); // 응답 대기 중 3초 간격
+        break;
+      case LORA_STATE_WAIT_TIME_SYNC:
+        osDelay(1000); // 시간 동기화 대기 중 1초 간격으로 체크
         break;
       case LORA_STATE_WAIT_SEND_INTERVAL:
         // 주기적 전송 대기 중 - 로그 출력 없이 조용히 대기
@@ -1982,14 +1997,18 @@ void StartSDLoggingTask(void const * argument)
   // 시스템 안정화 대기 (다른 태스크들 먼저 시작)
   osDelay(3000);
   
-  // SD 초기화 시도 (타임아웃 있는 안전한 방식)
-  LOG_INFO("[SD_TASK] 🔄 Attempting SD card initialization...");
+  // SD 초기화 시도 (이미 정상이면 스킵)
+  bool sd_init_needed = !SDStorage_IsReady();
+  int init_result = SDSTORAGE_OK; // 기본값: 성공
   
-  // 단계별 안전한 SD 초기화
-  int init_attempts = 0;
-  const int MAX_INIT_ATTEMPTS = 3;
-  
-  for (init_attempts = 0; init_attempts < MAX_INIT_ATTEMPTS; init_attempts++) {
+  if (sd_init_needed) {
+    LOG_INFO("[SD_TASK] 🔄 Attempting SD card initialization...");
+    
+    // 단계별 안전한 SD 초기화
+    int init_attempts = 0;
+    const int MAX_INIT_ATTEMPTS = 3;
+    
+    for (init_attempts = 0; init_attempts < MAX_INIT_ATTEMPTS; init_attempts++) {
     LOG_INFO("[SD_TASK] Initialization attempt %d/%d", init_attempts + 1, MAX_INIT_ATTEMPTS);
     
     // SDStorage_Init을 타임아웃과 함께 호출
@@ -1998,7 +2017,7 @@ void StartSDLoggingTask(void const * argument)
     
     // TODO: 실제로는 별도 태스크에서 SDStorage_Init 호출하고 여기서는 폴링
     // 현재는 간단히 직접 호출하되 타임아웃 체크
-    int init_result = SDStorage_Init();
+    init_result = SDStorage_Init();
     uint32_t init_duration = HAL_GetTick() - init_start_time;
     
     LOG_INFO("[SD_TASK] Init attempt %d took %lu ms, result: %d", 
@@ -2018,9 +2037,16 @@ void StartSDLoggingTask(void const * argument)
         osDelay(5000);
       }
     }
+    } // for loop 종료
+  } else {
+    // 이미 SD가 준비된 경우
+    LOG_INFO("[SD_TASK] 📝 SD card already ready, skipping initialization");
+    g_sd_initialization_result = SDSTORAGE_OK;
+    g_sd_logging_active = true;
   }
   
-  if (!g_sd_logging_active) {
+  // 초기화 결과에 따른 후속 처리
+  if (init_result != SDSTORAGE_OK) {
     LOG_ERROR("[SD_TASK] ❌ All SD initialization attempts failed");
     LOG_INFO("[SD_TASK] Continuing with terminal-only logging");
     

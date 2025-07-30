@@ -28,15 +28,111 @@ static size_t g_current_log_size = 0;
 static bool g_directory_available = false;  // 디렉토리 사용 가능 여부
 
 #ifdef STM32F746xx
-// 파일 닫기 보장을 위한 전역 추적 시스템
-static FIL* g_current_file_handle = NULL;  // 현재 열린 파일 핸들 추적
-static char g_current_open_file[256] = {0};  // 현재 열린 파일명 추적
+// 지속적 파일 핸들 시스템 (한 번 열어두고 계속 사용)
+static FIL g_persistent_log_file;  // 지속적으로 열려있는 로그 파일
+static bool g_file_is_open = false;  // 파일이 열려있는 상태 추적
+
+// 기존 방식 보존 (주석 처리)
+// static FIL* g_current_file_handle = NULL;  // 현재 열린 파일 핸들 추적
+// static char g_current_open_file[256] = {0};  // 현재 열린 파일명 추적
 #else
 static FILE* g_log_file = NULL;
 #endif
 
-// 파일 닫기 보장 함수들
+// 내부 함수 구현 - 함수 호출 순서에 맞게 배치
 #ifdef STM32F746xx
+static int _generate_log_filename(char* filename, size_t max_len)
+{
+    // 8.3 형식 파일명 생성 - 기존 파일 확인하여 중복 방지
+    static int file_counter = 0;  // 0부터 시작하여 첫 번째 호출에서 1로 설정
+    
+    // 첫 번째 호출에서만 기존 파일 확인
+    if (file_counter == 0) {
+        file_counter = 1;
+        
+        // 기존 파일들 확인하여 다음 번호 찾기
+        for (int i = 1; i <= 9999; i++) {
+            char test_filename[256];
+            FIL test_file;
+            
+            if (g_directory_available) {
+                snprintf(test_filename, sizeof(test_filename), "lora_logs/LORA%04d.TXT", i);
+            } else {
+                snprintf(test_filename, sizeof(test_filename), "LORA%04d.TXT", i);
+            }
+            
+            // 파일이 존재하는지 확인
+            FRESULT test_result = f_open(&test_file, test_filename, FA_READ);
+            if (test_result == FR_OK) {
+                f_close(&test_file);
+                file_counter = i + 1;  // 다음 번호로 설정
+            } else {
+                break;  // 파일이 없으면 현재 번호 사용
+            }
+        }
+        
+        LOG_DEBUG("[SDStorage] Auto-detected next log file number: %d", file_counter);
+    }
+    
+    // 디렉토리 사용 가능 여부에 따라 경로 결정
+    int result;
+    if (g_directory_available) {
+        // lora_logs 디렉토리에 파일 생성 (TXT 형식)
+        result = snprintf(filename, max_len, "lora_logs/LORA%04d.TXT", file_counter);
+    } else {
+        // 루트 디렉토리에 파일 생성 (TXT 형식)
+        result = snprintf(filename, max_len, "LORA%04d.TXT", file_counter);
+    }
+    
+    file_counter++;
+    
+    if (result < 0 || (size_t)result >= max_len) {
+        return SDSTORAGE_ERROR;
+    }
+    
+    return SDSTORAGE_OK;
+}
+
+// 지속적 파일 핸들 관리 함수들
+static void _ensure_persistent_file_open(void) {
+    if (!g_file_is_open || strlen(g_current_log_file) == 0) {
+        // 파일이 열려있지 않거나 파일명이 없으면 새로 열기
+        if (g_file_is_open) {
+            f_close(&g_persistent_log_file);
+            g_file_is_open = false;
+        }
+        
+        // 파일명 생성 (필요시)
+        if (strlen(g_current_log_file) == 0) {
+            _generate_log_filename(g_current_log_file, sizeof(g_current_log_file));
+        }
+        
+        // 파일 열기 (append 모드)
+        FRESULT open_result = f_open(&g_persistent_log_file, g_current_log_file, FA_OPEN_APPEND | FA_WRITE);
+        if (open_result != FR_OK) {
+            // 파일이 없으면 생성
+            open_result = f_open(&g_persistent_log_file, g_current_log_file, FA_CREATE_ALWAYS | FA_WRITE);
+        }
+        
+        if (open_result == FR_OK) {
+            g_file_is_open = true;
+            LOG_DEBUG("[SDStorage] Persistent file opened: %s", g_current_log_file);
+        } else {
+            LOG_ERROR("[SDStorage] Failed to open persistent file: %d", open_result);
+        }
+    }
+}
+
+static void _close_persistent_file(void) {
+    if (g_file_is_open) {
+        f_close(&g_persistent_log_file);
+        g_file_is_open = false;
+        LOG_DEBUG("[SDStorage] Persistent file closed: %s", g_current_log_file);
+    }
+}
+
+// 기존 방식 보존 (주석 처리)
+/*
 static void _ensure_file_closed(void) {
     if (g_current_file_handle != NULL) {
         LOG_DEBUG("[SDStorage] Force closing previously opened file: %s", g_current_open_file);
@@ -56,11 +152,12 @@ static void _register_file_closed(void) {
     g_current_file_handle = NULL;
     memset(g_current_open_file, 0, sizeof(g_current_open_file));
 }
+*/
 #endif
 
 // 내부 함수 선언
 static int _create_log_directory(void);
-static int _generate_log_filename(char* filename, size_t max_len);
+static void _close_persistent_file(void);
 // static uint32_t _get_current_timestamp(void); - unused function removed
 
 int SDStorage_Init(void)
@@ -69,8 +166,8 @@ int SDStorage_Init(void)
     // STM32 환경: FatFs 초기화 및 진단
     LOG_INFO("[SDStorage] Starting SD card initialization...");
     
-    // 초기화 시 파일 닫기 보장
-    _ensure_file_closed();
+    // 초기화 시 지속적 파일 닫기
+    _close_persistent_file();
     
     // 1. 하드웨어 상태 진단 및 TRANSFER 상태까지 대기
     extern SD_HandleTypeDef hsd1;
@@ -234,8 +331,17 @@ int SDStorage_Init(void)
     g_directory_available = (dir_result == SDSTORAGE_OK);
     
     g_sd_ready = true;
-    g_current_log_size = 0;
-    memset(g_current_log_file, 0, sizeof(g_current_log_file));
+    
+    // 기존 로그 파일명이 있으면 보존, 크기는 리셋하지 않음
+    if (strlen(g_current_log_file) > 0) {
+        LOG_INFO("[SDStorage] Preserving existing log file: %s (size: %d bytes)", 
+                 g_current_log_file, g_current_log_size);
+    } else {
+        // 첫 초기화인 경우에만 크기와 파일명 초기화
+        g_current_log_size = 0;
+        memset(g_current_log_file, 0, sizeof(g_current_log_file));
+        LOG_INFO("[SDStorage] First initialization - log file will be created on first write");
+    }
     
     LOG_INFO("[SDStorage] Initialization completed successfully");
     return SDSTORAGE_OK;
@@ -251,15 +357,54 @@ int SDStorage_WriteLog(const void* data, size_t size)
         return SDSTORAGE_INVALID_PARAM;
     }
     
-    // 새 로그 파일이 필요한 경우 생성
-    if (strlen(g_current_log_file) == 0 || 
-        g_current_log_size + size > SDSTORAGE_MAX_LOG_SIZE) {
+    // 새 로그 파일이 필요한 경우 생성 (파일 크기 체크는 일단 생략)
+    if (strlen(g_current_log_file) == 0) {
         if (SDStorage_CreateNewLogFile() != SDSTORAGE_OK) {
             return SDSTORAGE_FILE_ERROR;
         }
     }
 
 #ifdef STM32F746xx
+    // 새로운 방식: 지속적 파일 핸들 사용 (한 번 열어두고 계속 쓰기)
+    _ensure_persistent_file_open();
+    
+    if (!g_file_is_open) {
+        LOG_ERROR("[SDStorage] Cannot open persistent file");
+        return SDSTORAGE_FILE_ERROR;
+    }
+    
+    // 데이터 + 줄바꿈 추가하여 쓰기
+    char write_buffer[1024];  // 충분한 버퍼 크기
+    if (size + 2 < sizeof(write_buffer)) {
+        // 원본 데이터 복사
+        memcpy(write_buffer, data, size);
+        // 줄바꿈 추가
+        write_buffer[size] = '\r';
+        write_buffer[size + 1] = '\n';
+        
+        // 파일에 쓰기 (파일은 이미 열려있음)
+        UINT bytes_written;
+        FRESULT write_result = f_write(&g_persistent_log_file, write_buffer, size + 2, &bytes_written);
+        
+        if (write_result == FR_OK && bytes_written == size + 2) {
+            // 즉시 동기화 (파일은 열린 상태로 유지)
+            f_sync(&g_persistent_log_file);
+            g_current_log_size += bytes_written;
+            LOG_DEBUG("[SDStorage] Persistent write successful: %d bytes", bytes_written);
+            return SDSTORAGE_OK;
+        } else {
+            LOG_ERROR("[SDStorage] Persistent write failed: %d, written: %d/%d", write_result, bytes_written, size + 2);
+            // 쓰기 실패 시 파일 다시 열기 시도
+            _close_persistent_file();
+            return SDSTORAGE_FILE_ERROR;
+        }
+    } else {
+        LOG_ERROR("[SDStorage] Data too large for write buffer: %d bytes", size);
+        return SDSTORAGE_INVALID_PARAM;
+    }
+    
+    // 기존 방식 보존 (주석 처리)
+    /*
     // STM32 환경: 안정적인 열기-쓰기-닫기 방식
     
     // 로그 파일명이 없으면 생성
@@ -410,6 +555,7 @@ int SDStorage_WriteLog(const void* data, size_t size)
         
         return SDSTORAGE_FILE_ERROR;
     }
+    */
 #else
     // PC/테스트 환경: 파일 I/O 시뮬레이션 (항상 성공)
     // 실제 파일 쓰기 없이 성공으로 처리
@@ -428,8 +574,8 @@ void SDStorage_Disconnect(void)
 {
     if (g_sd_ready) {
 #ifdef STM32F746xx
-        // 파일 닫기 보장 후 마운트 해제
-        _ensure_file_closed();
+        // 지속적 파일 닫기 후 마운트 해제
+        _close_persistent_file();
         f_mount(NULL, SDPath, 0);
 #else
         if (g_log_file != NULL) {
@@ -551,58 +697,6 @@ static int _create_log_directory(void)
     LOG_INFO("[SDStorage] Test environment - directory creation simulated");
     return SDSTORAGE_OK;
 #endif
-}
-
-static int _generate_log_filename(char* filename, size_t max_len)
-{
-    // 8.3 형식 파일명 생성 - 기존 파일 확인하여 중복 방지
-    static int file_counter = 0;  // 0부터 시작하여 첫 번째 호출에서 1로 설정
-    
-    // 첫 번째 호출에서만 기존 파일 확인
-    if (file_counter == 0) {
-        file_counter = 1;
-        
-        // 기존 파일들 확인하여 다음 번호 찾기
-        for (int i = 1; i <= 9999; i++) {
-            char test_filename[256];
-            FIL test_file;
-            
-            if (g_directory_available) {
-                snprintf(test_filename, sizeof(test_filename), "lora_logs/LORA%04d.TXT", i);
-            } else {
-                snprintf(test_filename, sizeof(test_filename), "LORA%04d.TXT", i);
-            }
-            
-            // 파일이 존재하는지 확인
-            FRESULT test_result = f_open(&test_file, test_filename, FA_READ);
-            if (test_result == FR_OK) {
-                f_close(&test_file);
-                file_counter = i + 1;  // 다음 번호로 설정
-            } else {
-                break;  // 파일이 없으면 현재 번호 사용
-            }
-        }
-        
-        LOG_DEBUG("[SDStorage] Auto-detected next log file number: %d", file_counter);
-    }
-    
-    // 디렉토리 사용 가능 여부에 따라 경로 결정
-    int result;
-    if (g_directory_available) {
-        // lora_logs 디렉토리에 파일 생성 (TXT 형식)
-        result = snprintf(filename, max_len, "lora_logs/LORA%04d.TXT", file_counter);
-    } else {
-        // 루트 디렉토리에 파일 생성 (TXT 형식)
-        result = snprintf(filename, max_len, "LORA%04d.TXT", file_counter);
-    }
-    
-    file_counter++;
-    
-    if (result < 0 || (size_t)result >= max_len) {
-        return SDSTORAGE_ERROR;
-    }
-    
-    return SDSTORAGE_OK;
 }
 
 // static uint32_t _get_current_timestamp(void) - unused function removed

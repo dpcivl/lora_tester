@@ -30,6 +30,7 @@ static const char* get_state_name(LoraState state) {
         case LORA_STATE_WAIT_JOIN_OK: return "WAIT_JOIN_OK";
         case LORA_STATE_SEND_TIMEREQ: return "SEND_TIMEREQ";
         case LORA_STATE_WAIT_TIMEREQ_OK: return "WAIT_TIMEREQ_OK";
+        case LORA_STATE_WAIT_TIME_SYNC: return "WAIT_TIME_SYNC";
         case LORA_STATE_SEND_LTIME: return "SEND_LTIME";
         case LORA_STATE_WAIT_LTIME_RESPONSE: return "WAIT_LTIME_RESPONSE";
         case LORA_STATE_SEND_PERIODIC: return "SEND_PERIODIC";
@@ -129,7 +130,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
         case LORA_STATE_WAIT_JOIN_OK:
             if (uart_rx && is_join_response_ok(uart_rx)) {
                 LORA_LOG_JOIN_SUCCESS();
-                ctx->state = LORA_STATE_SEND_TIMEREQ; // JOIN 후 시간 동기화 요청으로 전환
+                ctx->state = LORA_STATE_SEND_TIMEREQ; // JOIN 후 시간 동기화 활성화로 전환
                 ctx->send_count = 0;
                 ctx->error_count = 0; // JOIN 성공 시 에러 카운터 리셋
                 ctx->retry_delay_ms = 1000; // 재시도 지연 시간 리셋
@@ -145,7 +146,25 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
         case LORA_STATE_WAIT_TIMEREQ_OK:
             if (uart_rx && is_response_ok(uart_rx)) {
                 LOG_WARN("[LoRa] ✅ Time synchronization enabled");
-                ctx->state = LORA_STATE_SEND_LTIME;
+                ctx->state = LORA_STATE_WAIT_TIME_SYNC;
+                ctx->last_retry_time = TIME_GetCurrentMs(); // 5초 지연 시작 시점 기록
+            }
+            break;
+        case LORA_STATE_WAIT_TIME_SYNC:
+            {
+                uint32_t current_time = TIME_GetCurrentMs();
+                const uint32_t TIME_SYNC_DELAY_MS = 5000; // 5초 대기
+                
+                if (ctx->last_retry_time == 0) {
+                    // 처음 진입 시 시작 시간 기록
+                    ctx->last_retry_time = current_time;
+                    LOG_INFO("[LoRa] ⏳ Waiting 5 seconds for time synchronization...");
+                } else if ((current_time - ctx->last_retry_time) >= TIME_SYNC_DELAY_MS) {
+                    // 5초 경과 시 LTIME 명령 실행
+                    LOG_INFO("[LoRa] ✅ Time sync delay completed, requesting network time");
+                    ctx->state = LORA_STATE_SEND_LTIME;
+                    ctx->last_retry_time = 0; // 타이머 리셋
+                }
             }
             break;
         case LORA_STATE_SEND_LTIME:
@@ -168,10 +187,10 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                         ctx->state = LORA_STATE_SEND_PERIODIC;
                         LOG_WARN("[LoRa] 🚀 PERIODIC SEND STARTED with message: %s", ctx->send_message);
                     } else {
-                        // SEND 후 시간 조회 - 다음 전송 대기
-                        LOG_WARN("[LoRa] 🕐 Time logged after SEND, waiting for next interval");
+                        // 주기적 전송 전 시간 조회 완료 - SEND 실행
+                        LOG_WARN("[LoRa] 🕐 Time synchronized, proceeding to SEND");
                         ctx->state = LORA_STATE_SEND_PERIODIC;
-                        ctx->last_send_time = TIME_GetCurrentMs(); // 마지막 송신 시간 저장
+                        // 시간은 다음 전송 후에 저장됨
                     }
                 } else {
                     LOG_DEBUG("[LoRa] Waiting for LTIME response, got: '%s'", uart_rx);
@@ -207,18 +226,19 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 switch(response_type) {
                     case RESPONSE_OK:
                         LORA_LOG_SEND_SUCCESS();
-                        // SEND 성공 후 시간 정보 조회를 위해 LTIME 상태로 전환
+                        // SEND 성공 후 다음 전송 대기 상태로 전환
                         ctx->state = LORA_STATE_WAIT_SEND_INTERVAL;
                         ctx->error_count = 0; // 성공 시 에러 카운터 리셋
                         ctx->retry_delay_ms = 1000; // 재시도 지연 시간 리셋
-                        LOG_INFO("[LoRa] SEND successful, requesting current time for logging...");
+                        ctx->last_send_time = TIME_GetCurrentMs(); // 송신 완료 시간 저장
+                        LOG_INFO("[LoRa] SEND successful, waiting for next interval...");
                         break;
                     case RESPONSE_TIMEOUT:
-                        LOG_WARN("[LoRa] SEND timeout - skipping time query");
-                        ctx->state = LORA_STATE_WAIT_SEND_INTERVAL; // 타임아웃 시 시간 조회 생략
+                        LOG_WARN("[LoRa] SEND timeout - waiting for next interval");
+                        ctx->state = LORA_STATE_WAIT_SEND_INTERVAL; // 타임아웃 시 대기 상태로 전환
                         ctx->error_count = 0; 
                         ctx->retry_delay_ms = 1000;
-                        ctx->last_send_time = TIME_GetCurrentMs();
+                        ctx->last_send_time = TIME_GetCurrentMs(); // 타임아웃 시간 저장
                         break;
                     case RESPONSE_ERROR:
                         LORA_LOG_SEND_FAILED("Network error");
@@ -247,7 +267,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 
                 if ((current_time - ctx->last_send_time) >= interval_ms) {
                     LOG_DEBUG("[LoRa] Send interval passed (%u ms), requesting time before next send", interval_ms);
-                    // 주기적 전송 시 시간 조회 먼저 실행
+                    // 다음 주기적 전송 전 시간 동기화 실행 (LTIME → SEND 순서)
                     ctx->state = LORA_STATE_SEND_LTIME;
                 } else {
                     // 아직 대기 시간이 남았으므로 상태 유지

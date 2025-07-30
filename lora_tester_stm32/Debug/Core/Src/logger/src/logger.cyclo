@@ -9,4 +9,4 @@
 ../Core/Src/logger/src/logger.c:104:6:LOGGER_IsSDLoggingEnabled	1
 ../Core/Src/logger/src/logger.c:108:6:LOGGER_SetMode	4
 ../Core/Src/logger/src/logger.c:120:14:LOGGER_GetMode	1
-../Core/Src/logger/src/logger.c:124:6:LOGGER_SendFormatted	15
+../Core/Src/logger/src/logger.c:124:6:LOGGER_SendFormatted	24
