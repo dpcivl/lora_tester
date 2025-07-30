@@ -20,6 +20,9 @@ const char* LORA_DEFAULT_INIT_COMMANDS[] = {
 
 const int LORA_DEFAULT_INIT_COMMANDS_COUNT = sizeof(LORA_DEFAULT_INIT_COMMANDS) / sizeof(LORA_DEFAULT_INIT_COMMANDS[0]);
 
+// 순차 메시지 번호 (JOIN마다 리셋됨)
+static int g_message_number = 1;
+
 // 상태 이름을 문자열로 변환하는 헬퍼 함수
 static const char* get_state_name(LoraState state) {
     switch(state) {
@@ -135,6 +138,7 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 ctx->error_count = 0; // JOIN 성공 시 에러 카운터 리셋
                 ctx->retry_delay_ms = 1000; // 재시도 지연 시간 리셋
                 ctx->last_retry_time = 0; // 재시도 시간 리셋
+                g_message_number = 1; // JOIN 성공 시 메시지 번호 리셋
                 LOG_INFO("[LoRa] JOIN successful, requesting time synchronization...");
             }
             break;
@@ -205,14 +209,13 @@ void LoraStarter_Process(LoraStarterContext* ctx, const char* uart_rx)
                 char hex_data[64];
                 char sequential_message[16];
                 
-                // 순차 번호 메시지 생성 (0001~9999)
-                static int message_number = 1;
-                snprintf(sequential_message, sizeof(sequential_message), "%04d", message_number);
+                // 순차 번호 메시지 생성 (0001~9999, JOIN마다 리셋)
+                snprintf(sequential_message, sizeof(sequential_message), "%04d", g_message_number);
                 
                 // 9999 다음에는 0001로 다시 시작
-                message_number++;
-                if (message_number > 9999) {
-                    message_number = 1;
+                g_message_number++;
+                if (g_message_number > 9999) {
+                    g_message_number = 1;
                 }
                 
                 // 문자열을 헥사 문자열로 변환
