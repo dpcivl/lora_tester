@@ -18,6 +18,7 @@ C_SRCS += \
 ../Core/Src/stm32f7xx_it.c \
 ../Core/Src/syscalls.c \
 ../Core/Src/sysmem.c \
+../Core/Src/system_config_runtime.c \
 ../Core/Src/system_stm32f7xx.c \
 ../Core/Src/time_common.c \
 ../Core/Src/time_stm32.c 
@@ -36,6 +37,7 @@ OBJS += \
 ./Core/Src/stm32f7xx_it.o \
 ./Core/Src/syscalls.o \
 ./Core/Src/sysmem.o \
+./Core/Src/system_config_runtime.o \
 ./Core/Src/system_stm32f7xx.o \
 ./Core/Src/time_common.o \
 ./Core/Src/time_stm32.o 
@@ -54,6 +56,7 @@ C_DEPS += \
 ./Core/Src/stm32f7xx_it.d \
 ./Core/Src/syscalls.d \
 ./Core/Src/sysmem.d \
+./Core/Src/system_config_runtime.d \
 ./Core/Src/system_stm32f7xx.d \
 ./Core/Src/time_common.d \
 ./Core/Src/time_stm32.d 
@@ -66,7 +69,7 @@ Core/Src/%.o Core/Src/%.su Core/Src/%.cyclo: ../Core/Src/%.c Core/Src/subdir.mk
 clean: clean-Core-2f-Src
 
 clean-Core-2f-Src:
-	-$(RM) ./Core/Src/CommandSender.cyclo ./Core/Src/CommandSender.d ./Core/Src/CommandSender.o ./Core/Src/CommandSender.su ./Core/Src/LoraStarter.cyclo ./Core/Src/LoraStarter.d ./Core/Src/LoraStarter.o ./Core/Src/LoraStarter.su ./Core/Src/Network.cyclo ./Core/Src/Network.d ./Core/Src/Network.o ./Core/Src/Network.su ./Core/Src/ResponseHandler.cyclo ./Core/Src/ResponseHandler.d ./Core/Src/ResponseHandler.o ./Core/Src/ResponseHandler.su ./Core/Src/SDStorage.cyclo ./Core/Src/SDStorage.d ./Core/Src/SDStorage.o ./Core/Src/SDStorage.su ./Core/Src/error_codes.cyclo ./Core/Src/error_codes.d ./Core/Src/error_codes.o ./Core/Src/error_codes.su ./Core/Src/freertos.cyclo ./Core/Src/freertos.d ./Core/Src/freertos.o ./Core/Src/freertos.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/stm32f7xx_hal_msp.cyclo ./Core/Src/stm32f7xx_hal_msp.d ./Core/Src/stm32f7xx_hal_msp.o ./Core/Src/stm32f7xx_hal_msp.su ./Core/Src/stm32f7xx_hal_timebase_tim.cyclo ./Core/Src/stm32f7xx_hal_timebase_tim.d ./Core/Src/stm32f7xx_hal_timebase_tim.o ./Core/Src/stm32f7xx_hal_timebase_tim.su ./Core/Src/stm32f7xx_it.cyclo ./Core/Src/stm32f7xx_it.d ./Core/Src/stm32f7xx_it.o ./Core/Src/stm32f7xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32f7xx.cyclo ./Core/Src/system_stm32f7xx.d ./Core/Src/system_stm32f7xx.o ./Core/Src/system_stm32f7xx.su ./Core/Src/time_common.cyclo ./Core/Src/time_common.d ./Core/Src/time_common.o ./Core/Src/time_common.su ./Core/Src/time_stm32.cyclo ./Core/Src/time_stm32.d ./Core/Src/time_stm32.o ./Core/Src/time_stm32.su
+	-$(RM) ./Core/Src/CommandSender.cyclo ./Core/Src/CommandSender.d ./Core/Src/CommandSender.o ./Core/Src/CommandSender.su ./Core/Src/LoraStarter.cyclo ./Core/Src/LoraStarter.d ./Core/Src/LoraStarter.o ./Core/Src/LoraStarter.su ./Core/Src/Network.cyclo ./Core/Src/Network.d ./Core/Src/Network.o ./Core/Src/Network.su ./Core/Src/ResponseHandler.cyclo ./Core/Src/ResponseHandler.d ./Core/Src/ResponseHandler.o ./Core/Src/ResponseHandler.su ./Core/Src/SDStorage.cyclo ./Core/Src/SDStorage.d ./Core/Src/SDStorage.o ./Core/Src/SDStorage.su ./Core/Src/error_codes.cyclo ./Core/Src/error_codes.d ./Core/Src/error_codes.o ./Core/Src/error_codes.su ./Core/Src/freertos.cyclo ./Core/Src/freertos.d ./Core/Src/freertos.o ./Core/Src/freertos.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/stm32f7xx_hal_msp.cyclo ./Core/Src/stm32f7xx_hal_msp.d ./Core/Src/stm32f7xx_hal_msp.o ./Core/Src/stm32f7xx_hal_msp.su ./Core/Src/stm32f7xx_hal_timebase_tim.cyclo ./Core/Src/stm32f7xx_hal_timebase_tim.d ./Core/Src/stm32f7xx_hal_timebase_tim.o ./Core/Src/stm32f7xx_hal_timebase_tim.su ./Core/Src/stm32f7xx_it.cyclo ./Core/Src/stm32f7xx_it.d ./Core/Src/stm32f7xx_it.o ./Core/Src/stm32f7xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_config_runtime.cyclo ./Core/Src/system_config_runtime.d ./Core/Src/system_config_runtime.o ./Core/Src/system_config_runtime.su ./Core/Src/system_stm32f7xx.cyclo ./Core/Src/system_stm32f7xx.d ./Core/Src/system_stm32f7xx.o ./Core/Src/system_stm32f7xx.su ./Core/Src/time_common.cyclo ./Core/Src/time_common.d ./Core/Src/time_common.o ./Core/Src/time_common.su ./Core/Src/time_stm32.cyclo ./Core/Src/time_stm32.d ./Core/Src/time_stm32.o ./Core/Src/time_stm32.su
 
 .PHONY: clean-Core-2f-Src
 

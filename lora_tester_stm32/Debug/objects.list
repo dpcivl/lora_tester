@@ -11,6 +11,7 @@
 "./Core/Src/stm32f7xx_it.o"
 "./Core/Src/syscalls.o"
 "./Core/Src/sysmem.o"
+"./Core/Src/system_config_runtime.o"
 "./Core/Src/system_stm32f7xx.o"
 "./Core/Src/time_common.o"
 "./Core/Src/time_stm32.o"

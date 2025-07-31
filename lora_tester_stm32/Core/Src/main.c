@@ -28,6 +28,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "logger.h"
+#include "system_config.h"
 #include "uart.h"
 #include "LoraStarter.h"
 #include "CommandSender.h"
@@ -2019,7 +2020,14 @@ void StartDefaultTask(void const * argument)
   
   LOG_INFO("=== STM32F746G-DISCO UART6 Test Started ===");
   LOG_INFO("System Clock: %lu MHz", SystemCoreClock / 1000000);
-  LOG_INFO("UART6 Configuration: 115200 baud, 8N1");
+  
+  // 런타임 설정 시스템 초기화
+  SystemConfig_InitializeSystem();
+  
+  // 런타임 설정에서 값 가져오기
+  LOG_INFO("UART6 Configuration: %lu baud, 8N1", GET_UART_BAUDRATE());
+  LOG_INFO("LoRa Send Interval: %lu ms", GET_LORA_SEND_INTERVAL());
+  LOG_INFO("SD Log File Max Size: %lu bytes", GET_SD_LOG_FILE_MAX_SIZE());
   LOG_INFO("📌 CRITICAL: For loopback test, connect PC6(TX) to PC7(RX) with a wire!");
   LOG_INFO("📌 UART6 Pins: PC6(TX) = Arduino D1, PC7(RX) = Arduino D0");
   
