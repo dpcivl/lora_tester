@@ -295,6 +295,7 @@ lora_tester_stm32/Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_
 
 # Power analysis logs
 power_analysis.log
-current_measurement.csv 
+current_measurement.csv
 
 **/.cursor/
+/.metadata/
