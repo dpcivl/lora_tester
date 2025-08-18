@@ -1,40 +1,41 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2025 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2025 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "string.h"
-#include "stdio.h"
+#include "bsp_driver_sd.h"
 #include "cmsis_os.h"
 #include "fatfs.h"
+#include "stdio.h"
+#include "string.h"
 #include "usb_host.h"
-#include "bsp_driver_sd.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "CommandSender.h"
+#include "LoraStarter.h"
+#include "Network.h"
+#include "ResponseHandler.h"
+#include "SDStorage.h"
 #include "logger.h"
+#include "power_management.h"
 #include "system_config.h"
 #include "uart.h"
-#include "LoraStarter.h"
-#include "CommandSender.h"
-#include "ResponseHandler.h"
-#include "Network.h"
-#include "SDStorage.h"
 
 // LoraStarter용 로깅 매크로는 logger.h에 정의되어 있음
 
@@ -62,21 +63,27 @@ extern volatile uint8_t uart_rx_error_flag;
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-#if defined ( __ICCARM__ ) /*!< IAR Compiler */
-#pragma location=0x2004c000
-ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-#pragma location=0x2004c0a0
-ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
+#if defined(__ICCARM__) /*!< IAR Compiler */
+#pragma location = 0x2004c000
+ETH_DMADescTypeDef
+    DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
+#pragma location = 0x2004c0a0
+ETH_DMADescTypeDef
+    DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
 
-#elif defined ( __CC_ARM )  /* MDK ARM Compiler */
+#elif defined(__CC_ARM) /* MDK ARM Compiler */
 
-__attribute__((at(0x2004c000))) ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-__attribute__((at(0x2004c0a0))) ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
+__attribute__((at(0x2004c000))) ETH_DMADescTypeDef
+    DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
+__attribute__((at(0x2004c0a0))) ETH_DMADescTypeDef
+    DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
 
-#elif defined ( __GNUC__ ) /* GNU Compiler */
+#elif defined(__GNUC__) /* GNU Compiler */
 
-ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((section(".RxDecripSection"))); /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((section(".TxDecripSection")));   /* Ethernet Tx DMA Descriptors */
+ETH_DMADescTypeDef DMARxDscrTab[ETH_RX_DESC_CNT] __attribute__((
+    section(".RxDecripSection"))); /* Ethernet Rx DMA Descriptors */
+ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT] __attribute__((
+    section(".TxDecripSection"))); /* Ethernet Tx DMA Descriptors */
 #endif
 
 ETH_TxPacketConfig TxConfig;
@@ -123,16 +130,16 @@ SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
 osThreadId receiveTaskHandle;
-osThreadId sdLoggingTaskHandle;  // SD 로깅 전용 태스크
+osThreadId sdLoggingTaskHandle; // SD 로깅 전용 태스크
 
 // SD 로깅 큐 및 상태 관리 (메모리 최적화)
-#define SD_LOG_QUEUE_SIZE 10         // 50 → 10으로 축소
-#define SD_LOG_MAX_MESSAGE_SIZE 128  // 512 → 128로 축소
+#define SD_LOG_QUEUE_SIZE 10        // 50 → 10으로 축소
+#define SD_LOG_MAX_MESSAGE_SIZE 128 // 512 → 128로 축소
 
 typedef struct {
-    char message[SD_LOG_MAX_MESSAGE_SIZE];
-    uint32_t timestamp;
-    size_t length;
+  char message[SD_LOG_MAX_MESSAGE_SIZE];
+  uint32_t timestamp;
+  size_t length;
 } SDLogEntry_t;
 
 osMessageQId sdLogQueueHandle;
@@ -181,19 +188,19 @@ static void MX_TIM8_Init(void);
 static void MX_TIM12_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART6_UART_Init(void);
-void MX_USART6_DMA_Init(void);  // USART6 DMA 초기화 함수 선언
-void StartDefaultTask(void const * argument);
-void StartSDLoggingTask(void const * argument);
-void StartReceiveTask(void const * argument);
+void MX_USART6_DMA_Init(void); // USART6 DMA 초기화 함수 선언
+void StartDefaultTask(void const *argument);
+void StartSDLoggingTask(void const *argument);
+void StartReceiveTask(void const *argument);
 
 /* USER CODE BEGIN PFP */
 
 // Helper functions for StartDefaultTask (거대 함수 분할)
 static int _initialize_sd_card_and_test(void);
 static int _setup_lora_uart_connection(void);
-static void _initialize_lora_context(LoraStarterContext* lora_ctx);
+static void _initialize_lora_context(LoraStarterContext *lora_ctx);
 static void _configure_logging_mode(int sd_result);
-static void _run_lora_process_loop(LoraStarterContext* lora_ctx);
+static void _run_lora_process_loop(LoraStarterContext *lora_ctx);
 static void _enter_idle_loop(void);
 
 /* USER CODE END PFP */
@@ -204,7 +211,8 @@ static void _enter_idle_loop(void);
 // UART DMA 콜백 함수들은 uart_stm32.c로 이동됨
 
 // SD 카드 초기화 결과를 저장하는 전역 변수
-int g_sd_initialization_result = -1;  // -1: 초기화 안됨, SDSTORAGE_OK: 성공, 기타: 실패
+int g_sd_initialization_result =
+    -1; // -1: 초기화 안됨, SDSTORAGE_OK: 성공, 기타: 실패
 
 // 시간 동기화 관리 변수
 static bool g_time_request_sent = false;
@@ -213,11 +221,10 @@ static uint32_t g_join_success_time = 0;
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
-{
+ * @brief  The application entry point.
+ * @retval int
+ */
+int main(void) {
   /* USER CODE BEGIN 1 */
   // 리셋 카운터 추가
   static uint32_t reset_count = 0;
@@ -226,7 +233,8 @@ int main(void)
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick.
+   */
   HAL_Init();
 
   /* USER CODE BEGIN Init */
@@ -245,8 +253,8 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();  // DMA는 UART보다 먼저 초기화
-  MX_USART6_DMA_Init();  // USART6 DMA 초기화 (UART보다 먼저)
+  MX_DMA_Init();        // DMA는 UART보다 먼저 초기화
+  MX_USART6_DMA_Init(); // USART6 DMA 초기화 (UART보다 먼저)
   MX_ADC3_Init();
   MX_CRC_Init();
   MX_DCMI_Init();
@@ -270,42 +278,55 @@ int main(void)
   MX_TIM12_Init();
   MX_USART1_UART_Init();
   MX_USART6_UART_Init();
-  
+
   // UART 초기화 후 DMA 핸들 다시 연결 (HAL_UART_Init에서 리셋될 수 있음)
   __HAL_LINKDMA(&huart6, hdmarx, hdma_usart6_rx);
-  
+
   // UART IDLE 인터럽트 활성화 (DMA 기반 수신을 위해)
   __HAL_UART_ENABLE_IT(&huart6, UART_IT_IDLE);
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-  
+
   // Logger 초기화 (터미널 출력만 사용)
   LOGGER_Connect("STM32", 0);
-  
+
   // 리셋 원인 확인
   LOG_INFO("=== SYSTEM START (Reset #%lu) ===", reset_count);
-  
+
+  // 전력 관리 초기화
+  PowerMgmt_Init();
+
+  // 시스템 전력 상태 출력
+  PowerMgmt_PrintSystemStatus();
+
   // RCC 리셋 플래그 확인
-  if (__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST)) LOG_WARN("Reset: BOR (Brown-out)");
-  if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST)) LOG_WARN("Reset: PIN (External)");
-  if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST)) LOG_WARN("Reset: POR (Power-on)");
-  if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST)) LOG_WARN("Reset: SOFTWARE");
-  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST)) LOG_WARN("Reset: IWDG (Watchdog)");
-  if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST)) LOG_WARN("Reset: WWDG (Window Watchdog)");
-  if (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST)) LOG_WARN("Reset: LPWR (Low Power)");
-  
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST))
+    LOG_WARN("Reset: BOR (Brown-out)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST))
+    LOG_WARN("Reset: PIN (External)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST))
+    LOG_WARN("Reset: POR (Power-on)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST))
+    LOG_WARN("Reset: SOFTWARE");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST))
+    LOG_WARN("Reset: IWDG (Watchdog)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST))
+    LOG_WARN("Reset: WWDG (Window Watchdog)");
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST))
+    LOG_WARN("Reset: LPWR (Low Power)");
+
   // 플래그 클리어
   __HAL_RCC_CLEAR_RESET_FLAGS();
-  
+
   // ===== 하드웨어 초기화만 main()에서 수행 =====
-  
+
   // SD카드 초기화는 FreeRTOS 태스크에서 수행 (커널 시작 후)
   LOG_INFO("🔄 SD card initialization will be performed in FreeRTOS task");
-  g_sd_initialization_result = -1;  // 초기화 안됨 상태
-  
+  g_sd_initialization_result = -1; // 초기화 안됨 상태
+
   // UART6 DMA 초기화 건너뛰기 (이미 main 초기화에서 완료됨)
   LOG_INFO("📤 UART DMA already initialized in main() - skipping");
-  
+
   // IDLE 인터럽트만 활성화 (메시지 끝 감지용)
   LOG_INFO("📤 Enabling UART IDLE interrupt...");
   __HAL_UART_ENABLE_IT(&huart6, UART_IT_IDLE);
@@ -327,12 +348,12 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   // SD 로깅 큐 생성 (안전성 체크 포함)
-  LOG_INFO("📤 Creating SD logging queue (size: %d, item: %d bytes)", 
+  LOG_INFO("📤 Creating SD logging queue (size: %d, item: %d bytes)",
            SD_LOG_QUEUE_SIZE, sizeof(SDLogEntry_t));
-  
+
   osMessageQDef(sdLogQueue, SD_LOG_QUEUE_SIZE, SDLogEntry_t);
   sdLogQueueHandle = osMessageCreate(osMessageQ(sdLogQueue), NULL);
-  
+
   if (sdLogQueueHandle == NULL) {
     LOG_ERROR("❌ SD logging queue creation FAILED - insufficient memory");
   } else {
@@ -350,7 +371,7 @@ int main(void)
   osThreadDef(receiveTask, StartReceiveTask, osPriorityNormal, 0, 4096);
   receiveTaskHandle = osThreadCreate(osThread(receiveTask), NULL);
   LOG_INFO("📤 Receive Task enabled for LoRa communication");
-  
+
   /* SD 로깅 태스크 활성화 - SD 카드 로깅을 위해 */
   osThreadDef(sdLoggingTask, StartSDLoggingTask, osPriorityLow, 0, 4096);
   sdLoggingTaskHandle = osThreadCreate(osThread(sdLoggingTask), NULL);
@@ -360,16 +381,15 @@ int main(void)
   /* Start scheduler */
   LOG_INFO("🚀 Starting FreeRTOS scheduler...");
   osKernelStart();
-  
+
   // 이 부분은 절대 실행되면 안됨 (스케줄러가 제어를 가져가야 함)
   LOG_ERROR("❌ FATAL: Scheduler failed to start - system halted");
 
   /* We should never get here as control is now taken by the scheduler */
-  
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+  while (1) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -378,27 +398,27 @@ int main(void)
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
+ * @brief System Clock Configuration
+ * @retval None
+ */
+void SystemClock_Config(void) {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure LSE Drive Capability
-  */
+   */
   HAL_PWR_EnableBkUpAccess();
 
   /** Configure the main internal regulator output voltage
-  */
+   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
+   * in the RCC_OscInitTypeDef structure.
+   */
+  RCC_OscInitStruct.OscillatorType =
+      RCC_OSCILLATORTYPE_LSI | RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -407,45 +427,42 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLN = 400;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 9;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
 
   /** Activate the Over-Drive mode
-  */
-  if (HAL_PWREx_EnableOverDrive() != HAL_OK)
-  {
+   */
+  if (HAL_PWREx_EnableOverDrive() != HAL_OK) {
     Error_Handler();
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
+                                RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_6) != HAL_OK)
-  {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_6) != HAL_OK) {
     Error_Handler();
   }
 }
 
 /**
-  * @brief Peripherals Common Clock Configuration
-  * @retval None
-  */
-void PeriphCommonClock_Config(void)
-{
+ * @brief Peripherals Common Clock Configuration
+ * @retval None
+ */
+void PeriphCommonClock_Config(void) {
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
 
   /** Initializes the peripherals clock
-  */
-  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_LTDC|RCC_PERIPHCLK_SAI2
-                              |RCC_PERIPHCLK_SDMMC1|RCC_PERIPHCLK_CLK48;
+   */
+  PeriphClkInitStruct.PeriphClockSelection =
+      RCC_PERIPHCLK_LTDC | RCC_PERIPHCLK_SAI2 | RCC_PERIPHCLK_SDMMC1 |
+      RCC_PERIPHCLK_CLK48;
   PeriphClkInitStruct.PLLSAI.PLLSAIN = 384;
   PeriphClkInitStruct.PLLSAI.PLLSAIR = 5;
   PeriphClkInitStruct.PLLSAI.PLLSAIQ = 2;
@@ -455,19 +472,17 @@ void PeriphCommonClock_Config(void)
   PeriphClkInitStruct.Sai2ClockSelection = RCC_SAI2CLKSOURCE_PLLSAI;
   PeriphClkInitStruct.Clk48ClockSelection = RCC_CLK48SOURCE_PLLSAIP;
   PeriphClkInitStruct.Sdmmc1ClockSelection = RCC_SDMMC1CLKSOURCE_CLK48;
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
-  {
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK) {
     Error_Handler();
   }
 }
 
 /**
-  * @brief ADC3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ADC3_Init(void)
-{
+ * @brief ADC3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_ADC3_Init(void) {
 
   /* USER CODE BEGIN ADC3_Init 0 */
 
@@ -479,8 +494,9 @@ static void MX_ADC3_Init(void)
 
   /* USER CODE END ADC3_Init 1 */
 
-  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
-  */
+  /** Configure the global features of the ADC (Clock, Resolution, Data
+   * Alignment and number of conversion)
+   */
   hadc3.Instance = ADC3;
   hadc3.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc3.Init.Resolution = ADC_RESOLUTION_12B;
@@ -493,33 +509,30 @@ static void MX_ADC3_Init(void)
   hadc3.Init.NbrOfConversion = 1;
   hadc3.Init.DMAContinuousRequests = DISABLE;
   hadc3.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  if (HAL_ADC_Init(&hadc3) != HAL_OK)
-  {
+  if (HAL_ADC_Init(&hadc3) != HAL_OK) {
     Error_Handler();
   }
 
-  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
-  */
+  /** Configure for the selected ADC regular channel its corresponding rank in
+   * the sequencer and its sample time.
+   */
   sConfig.Channel = ADC_CHANNEL_4;
   sConfig.Rank = ADC_REGULAR_RANK_1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
-  if (HAL_ADC_ConfigChannel(&hadc3, &sConfig) != HAL_OK)
-  {
+  if (HAL_ADC_ConfigChannel(&hadc3, &sConfig) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN ADC3_Init 2 */
 
   /* USER CODE END ADC3_Init 2 */
-
 }
 
 /**
-  * @brief CRC Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_CRC_Init(void)
-{
+ * @brief CRC Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_CRC_Init(void) {
 
   /* USER CODE BEGIN CRC_Init 0 */
 
@@ -534,23 +547,20 @@ static void MX_CRC_Init(void)
   hcrc.Init.InputDataInversionMode = CRC_INPUTDATA_INVERSION_NONE;
   hcrc.Init.OutputDataInversionMode = CRC_OUTPUTDATA_INVERSION_DISABLE;
   hcrc.InputDataFormat = CRC_INPUTDATA_FORMAT_BYTES;
-  if (HAL_CRC_Init(&hcrc) != HAL_OK)
-  {
+  if (HAL_CRC_Init(&hcrc) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN CRC_Init 2 */
 
   /* USER CODE END CRC_Init 2 */
-
 }
 
 /**
-  * @brief DCMI Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_DCMI_Init(void)
-{
+ * @brief DCMI Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_DCMI_Init(void) {
 
   /* USER CODE BEGIN DCMI_Init 0 */
 
@@ -571,23 +581,20 @@ static void MX_DCMI_Init(void)
   hdcmi.Init.ByteSelectStart = DCMI_OEBS_ODD;
   hdcmi.Init.LineSelectMode = DCMI_LSM_ALL;
   hdcmi.Init.LineSelectStart = DCMI_OELS_ODD;
-  if (HAL_DCMI_Init(&hdcmi) != HAL_OK)
-  {
+  if (HAL_DCMI_Init(&hdcmi) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN DCMI_Init 2 */
 
   /* USER CODE END DCMI_Init 2 */
-
 }
 
 /**
-  * @brief DMA2D Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_DMA2D_Init(void)
-{
+ * @brief DMA2D Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_DMA2D_Init(void) {
 
   /* USER CODE BEGIN DMA2D_Init 0 */
 
@@ -604,33 +611,29 @@ static void MX_DMA2D_Init(void)
   hdma2d.LayerCfg[1].InputColorMode = DMA2D_INPUT_ARGB8888;
   hdma2d.LayerCfg[1].AlphaMode = DMA2D_NO_MODIF_ALPHA;
   hdma2d.LayerCfg[1].InputAlpha = 0;
-  if (HAL_DMA2D_Init(&hdma2d) != HAL_OK)
-  {
+  if (HAL_DMA2D_Init(&hdma2d) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_DMA2D_ConfigLayer(&hdma2d, 1) != HAL_OK)
-  {
+  if (HAL_DMA2D_ConfigLayer(&hdma2d, 1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN DMA2D_Init 2 */
 
   /* USER CODE END DMA2D_Init 2 */
-
 }
 
 /**
-  * @brief ETH Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ETH_Init(void)
-{
+ * @brief ETH Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_ETH_Init(void) {
 
   /* USER CODE BEGIN ETH_Init 0 */
 
   /* USER CODE END ETH_Init 0 */
 
-   static uint8_t MACAddr[6];
+  static uint8_t MACAddr[6];
 
   /* USER CODE BEGIN ETH_Init 1 */
 
@@ -652,28 +655,26 @@ static void MX_ETH_Init(void)
 
   /* USER CODE END MACADDRESS */
 
-  if (HAL_ETH_Init(&heth) != HAL_OK)
-  {
+  if (HAL_ETH_Init(&heth) != HAL_OK) {
     Error_Handler();
   }
 
-  memset(&TxConfig, 0 , sizeof(ETH_TxPacketConfig));
-  TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
+  memset(&TxConfig, 0, sizeof(ETH_TxPacketConfig));
+  TxConfig.Attributes =
+      ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
   TxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
   TxConfig.CRCPadCtrl = ETH_CRC_PAD_INSERT;
   /* USER CODE BEGIN ETH_Init 2 */
 
   /* USER CODE END ETH_Init 2 */
-
 }
 
 /**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C1_Init(void)
-{
+ * @brief I2C1 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_I2C1_Init(void) {
 
   /* USER CODE BEGIN I2C1_Init 0 */
 
@@ -691,37 +692,32 @@ static void MX_I2C1_Init(void)
   hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
     Error_Handler();
   }
 
   /** Configure Analogue filter
-  */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
-  {
+   */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE) != HAL_OK) {
     Error_Handler();
   }
 
   /** Configure Digital filter
-  */
-  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK)
-  {
+   */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN I2C1_Init 2 */
 
   /* USER CODE END I2C1_Init 2 */
-
 }
 
 /**
-  * @brief I2C3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C3_Init(void)
-{
+ * @brief I2C3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_I2C3_Init(void) {
 
   /* USER CODE BEGIN I2C3_Init 0 */
 
@@ -739,37 +735,32 @@ static void MX_I2C3_Init(void)
   hi2c3.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
   hi2c3.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c3.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c3) != HAL_OK)
-  {
+  if (HAL_I2C_Init(&hi2c3) != HAL_OK) {
     Error_Handler();
   }
 
   /** Configure Analogue filter
-  */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c3, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
-  {
+   */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c3, I2C_ANALOGFILTER_ENABLE) != HAL_OK) {
     Error_Handler();
   }
 
   /** Configure Digital filter
-  */
-  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c3, 0) != HAL_OK)
-  {
+   */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c3, 0) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN I2C3_Init 2 */
 
   /* USER CODE END I2C3_Init 2 */
-
 }
 
 /**
-  * @brief LTDC Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_LTDC_Init(void)
-{
+ * @brief LTDC Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_LTDC_Init(void) {
 
   /* USER CODE BEGIN LTDC_Init 0 */
 
@@ -796,8 +787,7 @@ static void MX_LTDC_Init(void)
   hltdc.Init.Backcolor.Blue = 0;
   hltdc.Init.Backcolor.Green = 0;
   hltdc.Init.Backcolor.Red = 0;
-  if (HAL_LTDC_Init(&hltdc) != HAL_OK)
-  {
+  if (HAL_LTDC_Init(&hltdc) != HAL_OK) {
     Error_Handler();
   }
   pLayerCfg.WindowX0 = 0;
@@ -815,23 +805,20 @@ static void MX_LTDC_Init(void)
   pLayerCfg.Backcolor.Blue = 0;
   pLayerCfg.Backcolor.Green = 0;
   pLayerCfg.Backcolor.Red = 0;
-  if (HAL_LTDC_ConfigLayer(&hltdc, &pLayerCfg, 0) != HAL_OK)
-  {
+  if (HAL_LTDC_ConfigLayer(&hltdc, &pLayerCfg, 0) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN LTDC_Init 2 */
 
   /* USER CODE END LTDC_Init 2 */
-
 }
 
 /**
-  * @brief QUADSPI Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_QUADSPI_Init(void)
-{
+ * @brief QUADSPI Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_QUADSPI_Init(void) {
 
   /* USER CODE BEGIN QUADSPI_Init 0 */
 
@@ -850,23 +837,20 @@ static void MX_QUADSPI_Init(void)
   hqspi.Init.ClockMode = QSPI_CLOCK_MODE_0;
   hqspi.Init.FlashID = QSPI_FLASH_ID_1;
   hqspi.Init.DualFlash = QSPI_DUALFLASH_DISABLE;
-  if (HAL_QSPI_Init(&hqspi) != HAL_OK)
-  {
+  if (HAL_QSPI_Init(&hqspi) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN QUADSPI_Init 2 */
 
   /* USER CODE END QUADSPI_Init 2 */
-
 }
 
 /**
-  * @brief RTC Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_RTC_Init(void)
-{
+ * @brief RTC Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_RTC_Init(void) {
 
   /* USER CODE BEGIN RTC_Init 0 */
 
@@ -881,7 +865,7 @@ static void MX_RTC_Init(void)
   /* USER CODE END RTC_Init 1 */
 
   /** Initialize RTC Only
-  */
+   */
   hrtc.Instance = RTC;
   hrtc.Init.HourFormat = RTC_HOURFORMAT_24;
   hrtc.Init.AsynchPrediv = 127;
@@ -889,8 +873,7 @@ static void MX_RTC_Init(void)
   hrtc.Init.OutPut = RTC_OUTPUT_DISABLE;
   hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
   hrtc.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
-  if (HAL_RTC_Init(&hrtc) != HAL_OK)
-  {
+  if (HAL_RTC_Init(&hrtc) != HAL_OK) {
     Error_Handler();
   }
 
@@ -899,27 +882,25 @@ static void MX_RTC_Init(void)
   /* USER CODE END Check_RTC_BKUP */
 
   /** Initialize RTC and set the Time and Date
-  */
+   */
   sTime.Hours = 0x0;
   sTime.Minutes = 0x0;
   sTime.Seconds = 0x0;
   sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
   sTime.StoreOperation = RTC_STOREOPERATION_RESET;
-  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK)
-  {
+  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK) {
     Error_Handler();
   }
   sDate.WeekDay = RTC_WEEKDAY_MONDAY;
   sDate.Month = RTC_MONTH_JANUARY;
   sDate.Date = 0x1;
   sDate.Year = 0x0;
-  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BCD) != HAL_OK)
-  {
+  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BCD) != HAL_OK) {
     Error_Handler();
   }
 
   /** Enable the Alarm A
-  */
+   */
   sAlarm.AlarmTime.Hours = 0x0;
   sAlarm.AlarmTime.Minutes = 0x0;
   sAlarm.AlarmTime.Seconds = 0x0;
@@ -931,38 +912,34 @@ static void MX_RTC_Init(void)
   sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
   sAlarm.AlarmDateWeekDay = 0x1;
   sAlarm.Alarm = RTC_ALARM_A;
-  if (HAL_RTC_SetAlarm(&hrtc, &sAlarm, RTC_FORMAT_BCD) != HAL_OK)
-  {
+  if (HAL_RTC_SetAlarm(&hrtc, &sAlarm, RTC_FORMAT_BCD) != HAL_OK) {
     Error_Handler();
   }
 
   /** Enable the Alarm B
-  */
+   */
   sAlarm.Alarm = RTC_ALARM_B;
-  if (HAL_RTC_SetAlarm(&hrtc, &sAlarm, RTC_FORMAT_BCD) != HAL_OK)
-  {
+  if (HAL_RTC_SetAlarm(&hrtc, &sAlarm, RTC_FORMAT_BCD) != HAL_OK) {
     Error_Handler();
   }
 
   /** Enable the TimeStamp
-  */
-  if (HAL_RTCEx_SetTimeStamp(&hrtc, RTC_TIMESTAMPEDGE_RISING, RTC_TIMESTAMPPIN_POS1) != HAL_OK)
-  {
+   */
+  if (HAL_RTCEx_SetTimeStamp(&hrtc, RTC_TIMESTAMPEDGE_RISING,
+                             RTC_TIMESTAMPPIN_POS1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN RTC_Init 2 */
 
   /* USER CODE END RTC_Init 2 */
-
 }
 
 /**
-  * @brief SAI2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SAI2_Init(void)
-{
+ * @brief SAI2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_SAI2_Init(void) {
 
   /* USER CODE BEGIN SAI2_Init 0 */
 
@@ -995,8 +972,7 @@ static void MX_SAI2_Init(void)
   hsai_BlockA2.SlotInit.SlotSize = SAI_SLOTSIZE_DATASIZE;
   hsai_BlockA2.SlotInit.SlotNumber = 1;
   hsai_BlockA2.SlotInit.SlotActive = 0x00000000;
-  if (HAL_SAI_Init(&hsai_BlockA2) != HAL_OK)
-  {
+  if (HAL_SAI_Init(&hsai_BlockA2) != HAL_OK) {
     Error_Handler();
   }
   hsai_BlockB2.Instance = SAI2_Block_B;
@@ -1021,23 +997,20 @@ static void MX_SAI2_Init(void)
   hsai_BlockB2.SlotInit.SlotSize = SAI_SLOTSIZE_DATASIZE;
   hsai_BlockB2.SlotInit.SlotNumber = 1;
   hsai_BlockB2.SlotInit.SlotActive = 0x00000000;
-  if (HAL_SAI_Init(&hsai_BlockB2) != HAL_OK)
-  {
+  if (HAL_SAI_Init(&hsai_BlockB2) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN SAI2_Init 2 */
 
   /* USER CODE END SAI2_Init 2 */
-
 }
 
 /**
-  * @brief SDMMC1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SDMMC1_SD_Init(void)
-{
+ * @brief SDMMC1 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_SDMMC1_SD_Init(void) {
 
   /* USER CODE BEGIN SDMMC1_Init 0 */
 
@@ -1050,17 +1023,19 @@ static void MX_SDMMC1_SD_Init(void)
   hsd1.Init.ClockEdge = SDMMC_CLOCK_EDGE_RISING;
   hsd1.Init.ClockBypass = SDMMC_CLOCK_BYPASS_DISABLE;
   hsd1.Init.ClockPowerSave = SDMMC_CLOCK_POWER_SAVE_DISABLE;
-  hsd1.Init.BusWide = SDMMC_BUS_WIDE_1B;  // ST 커뮤니티 가이드: 1-bit 모드로 변경
-  hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_ENABLE;  // 하드웨어 플로우 컨트롤 활성화 (안정성 향상)
-  hsd1.Init.ClockDiv = 8;  // 클럭 분주비 증가 (2→8, STM32F7 안정화 권장값)
+  hsd1.Init.BusWide =
+      SDMMC_BUS_WIDE_1B; // ST 커뮤니티 가이드: 1-bit 모드로 변경
+  hsd1.Init.HardwareFlowControl =
+      SDMMC_HARDWARE_FLOW_CONTROL_ENABLE; // 하드웨어 플로우 컨트롤 활성화
+                                          // (안정성 향상)
+  hsd1.Init.ClockDiv = 8; // 클럭 분주비 증가 (2→8, STM32F7 안정화 권장값)
   /* USER CODE BEGIN SDMMC1_Init 2 */
-  
+
   // Initialize SD card with HAL
-  if (HAL_SD_Init(&hsd1) != HAL_OK)
-  {
+  if (HAL_SD_Init(&hsd1) != HAL_OK) {
     Error_Handler();
   }
-  
+
   // BSP 초기화도 호출 (FatFs 호환성을 위해)
   uint8_t bsp_result = BSP_SD_Init();
   if (bsp_result != MSD_OK) {
@@ -1069,16 +1044,14 @@ static void MX_SDMMC1_SD_Init(void)
   }
 
   /* USER CODE END SDMMC1_Init 2 */
-
 }
 
 /**
-  * @brief SPDIFRX Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPDIFRX_Init(void)
-{
+ * @brief SPDIFRX Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_SPDIFRX_Init(void) {
 
   /* USER CODE BEGIN SPDIFRX_Init 0 */
 
@@ -1098,23 +1071,20 @@ static void MX_SPDIFRX_Init(void)
   hspdif.Init.ChannelStatusMask = SPDIFRX_CHANNELSTATUS_OFF;
   hspdif.Init.ValidityBitMask = SPDIFRX_VALIDITYMASK_OFF;
   hspdif.Init.ParityErrorMask = SPDIFRX_PARITYERRORMASK_OFF;
-  if (HAL_SPDIFRX_Init(&hspdif) != HAL_OK)
-  {
+  if (HAL_SPDIFRX_Init(&hspdif) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN SPDIFRX_Init 2 */
 
   /* USER CODE END SPDIFRX_Init 2 */
-
 }
 
 /**
-  * @brief SPI2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI2_Init(void)
-{
+ * @brief SPI2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_SPI2_Init(void) {
 
   /* USER CODE BEGIN SPI2_Init 0 */
 
@@ -1138,23 +1108,20 @@ static void MX_SPI2_Init(void)
   hspi2.Init.CRCPolynomial = 7;
   hspi2.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
   hspi2.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
-  if (HAL_SPI_Init(&hspi2) != HAL_OK)
-  {
+  if (HAL_SPI_Init(&hspi2) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN SPI2_Init 2 */
 
   /* USER CODE END SPI2_Init 2 */
-
 }
 
 /**
-  * @brief TIM1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM1_Init(void)
-{
+ * @brief TIM1 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM1_Init(void) {
 
   /* USER CODE BEGIN TIM1_Init 0 */
 
@@ -1175,24 +1142,20 @@ static void MX_TIM1_Init(void)
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
-  {
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK) {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
-  {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK) {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
@@ -1202,8 +1165,7 @@ static void MX_TIM1_Init(void)
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
   sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
     Error_Handler();
   }
   sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
@@ -1217,24 +1179,21 @@ static void MX_TIM1_Init(void)
   sBreakDeadTimeConfig.Break2Polarity = TIM_BREAK2POLARITY_HIGH;
   sBreakDeadTimeConfig.Break2Filter = 0;
   sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
-  {
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM1_Init 2 */
 
   /* USER CODE END TIM1_Init 2 */
   HAL_TIM_MspPostInit(&htim1);
-
 }
 
 /**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
+ * @brief TIM2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM2_Init(void) {
 
   /* USER CODE BEGIN TIM2_Init 0 */
 
@@ -1253,47 +1212,40 @@ static void MX_TIM2_Init(void)
   htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-  {
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK) {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK) {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM2_Init 2 */
 
   /* USER CODE END TIM2_Init 2 */
   HAL_TIM_MspPostInit(&htim2);
-
 }
 
 /**
-  * @brief TIM3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM3_Init(void)
-{
+ * @brief TIM3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM3_Init(void) {
 
   /* USER CODE BEGIN TIM3_Init 0 */
 
@@ -1312,47 +1264,40 @@ static void MX_TIM3_Init(void)
   htim3.Init.Period = 65535;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
-  {
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK) {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
-  {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK) {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
 
   /* USER CODE END TIM3_Init 2 */
   HAL_TIM_MspPostInit(&htim3);
-
 }
 
 /**
-  * @brief TIM5 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM5_Init(void)
-{
+ * @brief TIM5 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM5_Init(void) {
 
   /* USER CODE BEGIN TIM5_Init 0 */
 
@@ -1371,47 +1316,40 @@ static void MX_TIM5_Init(void)
   htim5.Init.Period = 4294967295;
   htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim5) != HAL_OK)
-  {
+  if (HAL_TIM_Base_Init(&htim5) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim5, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim5, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim5) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_Init(&htim5) != HAL_OK) {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK)
-  {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK) {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim5, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_ConfigChannel(&htim5, &sConfigOC, TIM_CHANNEL_4) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM5_Init 2 */
 
   /* USER CODE END TIM5_Init 2 */
   HAL_TIM_MspPostInit(&htim5);
-
 }
 
 /**
-  * @brief TIM8 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM8_Init(void)
-{
+ * @brief TIM8 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM8_Init(void) {
 
   /* USER CODE BEGIN TIM8_Init 0 */
 
@@ -1430,35 +1368,30 @@ static void MX_TIM8_Init(void)
   htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim8.Init.RepetitionCounter = 0;
   htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim8) != HAL_OK)
-  {
+  if (HAL_TIM_Base_Init(&htim8) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim8, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim8, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterOutputTrigger2 = TIM_TRGO2_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sMasterConfig) != HAL_OK)
-  {
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sMasterConfig) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM8_Init 2 */
 
   /* USER CODE END TIM8_Init 2 */
-
 }
 
 /**
-  * @brief TIM12 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM12_Init(void)
-{
+ * @brief TIM12 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM12_Init(void) {
 
   /* USER CODE BEGIN TIM12_Init 0 */
 
@@ -1475,32 +1408,28 @@ static void MX_TIM12_Init(void)
   htim12.Init.Period = 65535;
   htim12.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_PWM_Init(&htim12) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_Init(&htim12) != HAL_OK) {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM12_Init 2 */
 
   /* USER CODE END TIM12_Init 2 */
   HAL_TIM_MspPostInit(&htim12);
-
 }
 
 /**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
-{
+ * @brief USART1 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_USART1_UART_Init(void) {
 
   /* USER CODE BEGIN USART1_Init 0 */
 
@@ -1519,23 +1448,20 @@ static void MX_USART1_UART_Init(void)
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
   huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
+  if (HAL_UART_Init(&huart1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
-
 }
 
 /**
-  * @brief USART6 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART6_UART_Init(void)
-{
+ * @brief USART6 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_USART6_UART_Init(void) {
 
   /* USER CODE BEGIN USART6_Init 0 */
 
@@ -1554,19 +1480,16 @@ static void MX_USART6_UART_Init(void)
   huart6.Init.OverSampling = UART_OVERSAMPLING_16;
   huart6.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart6.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart6) != HAL_OK)
-  {
+  if (HAL_UART_Init(&huart6) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN USART6_Init 2 */
 
   /* USER CODE END USART6_Init 2 */
-
 }
 
 /* FMC initialization function */
-static void MX_FMC_Init(void)
-{
+static void MX_FMC_Init(void) {
 
   /* USER CODE BEGIN FMC_Init 0 */
 
@@ -1579,7 +1502,7 @@ static void MX_FMC_Init(void)
   /* USER CODE END FMC_Init 1 */
 
   /** Perform the SDRAM1 memory initialization sequence
-  */
+   */
   hsdram1.Instance = FMC_SDRAM_DEVICE;
   /* hsdram1.Init */
   hsdram1.Init.SDBank = FMC_SDRAM_BANK1;
@@ -1601,9 +1524,8 @@ static void MX_FMC_Init(void)
   SdramTiming.RPDelay = 2;
   SdramTiming.RCDDelay = 2;
 
-  if (HAL_SDRAM_Init(&hsdram1, &SdramTiming) != HAL_OK)
-  {
-    Error_Handler( );
+  if (HAL_SDRAM_Init(&hsdram1, &SdramTiming) != HAL_OK) {
+    Error_Handler();
   }
 
   /* USER CODE BEGIN FMC_Init 2 */
@@ -1612,12 +1534,11 @@ static void MX_FMC_Init(void)
 }
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
+ * @brief GPIO Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_GPIO_Init(void) {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
@@ -1637,10 +1558,11 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(OTG_FS_PowerSwitchOn_GPIO_Port, OTG_FS_PowerSwitchOn_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(OTG_FS_PowerSwitchOn_GPIO_Port, OTG_FS_PowerSwitchOn_Pin,
+                    GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOI, ARDUINO_D7_Pin|ARDUINO_D8_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOI, ARDUINO_D7_Pin | ARDUINO_D8_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LCD_BL_CTRL_GPIO_Port, LCD_BL_CTRL_Pin, GPIO_PIN_SET);
@@ -1652,7 +1574,8 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(DCMI_PWR_EN_GPIO_Port, DCMI_PWR_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOG, ARDUINO_D4_Pin|ARDUINO_D2_Pin|EXT_RST_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOG, ARDUINO_D4_Pin | ARDUINO_D2_Pin | EXT_RST_Pin,
+                    GPIO_PIN_RESET);
 
   /*Configure GPIO pin : OTG_HS_OverCurrent_Pin */
   GPIO_InitStruct.Pin = OTG_HS_OverCurrent_Pin;
@@ -1662,8 +1585,8 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : ULPI_D7_Pin ULPI_D6_Pin ULPI_D5_Pin ULPI_D3_Pin
                            ULPI_D2_Pin ULPI_D1_Pin ULPI_D4_Pin */
-  GPIO_InitStruct.Pin = ULPI_D7_Pin|ULPI_D6_Pin|ULPI_D5_Pin|ULPI_D3_Pin
-                          |ULPI_D2_Pin|ULPI_D1_Pin|ULPI_D4_Pin;
+  GPIO_InitStruct.Pin = ULPI_D7_Pin | ULPI_D6_Pin | ULPI_D5_Pin | ULPI_D3_Pin |
+                        ULPI_D2_Pin | ULPI_D1_Pin | ULPI_D4_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -1690,7 +1613,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(OTG_FS_PowerSwitchOn_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : ARDUINO_D7_Pin ARDUINO_D8_Pin LCD_DISP_Pin */
-  GPIO_InitStruct.Pin = ARDUINO_D7_Pin|ARDUINO_D8_Pin|LCD_DISP_Pin;
+  GPIO_InitStruct.Pin = ARDUINO_D7_Pin | ARDUINO_D8_Pin | LCD_DISP_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -1716,7 +1639,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(OTG_FS_OverCurrent_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : TP3_Pin NC2_Pin */
-  GPIO_InitStruct.Pin = TP3_Pin|NC2_Pin;
+  GPIO_InitStruct.Pin = TP3_Pin | NC2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
@@ -1743,14 +1666,14 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(ULPI_NXT_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : ARDUINO_D4_Pin ARDUINO_D2_Pin EXT_RST_Pin */
-  GPIO_InitStruct.Pin = ARDUINO_D4_Pin|ARDUINO_D2_Pin|EXT_RST_Pin;
+  GPIO_InitStruct.Pin = ARDUINO_D4_Pin | ARDUINO_D2_Pin | EXT_RST_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
   /*Configure GPIO pins : ULPI_STP_Pin ULPI_DIR_Pin */
-  GPIO_InitStruct.Pin = ULPI_STP_Pin|ULPI_DIR_Pin;
+  GPIO_InitStruct.Pin = ULPI_STP_Pin | ULPI_DIR_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -1764,7 +1687,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(RMII_RXER_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : ULPI_CLK_Pin ULPI_D0_Pin */
-  GPIO_InitStruct.Pin = ULPI_CLK_Pin|ULPI_D0_Pin;
+  GPIO_InitStruct.Pin = ULPI_CLK_Pin | ULPI_D0_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -1786,332 +1709,348 @@ static void MX_GPIO_Init(void)
  * @brief SD 카드 초기화 및 기본 기능 테스트
  * @return SD 초기화 결과 (SDSTORAGE_OK: 성공, 기타: 실패)
  */
-static int _initialize_sd_card_and_test(void)
-{
-    LOG_INFO("📤 [TX_TASK] Starting SD card basic functionality test...");
-    
-    // SD 초기화 시도
-    LOG_INFO("📤 [TX_TASK] Attempting SD card initialization...");
-    int sd_result = SDStorage_Init();
-    
-    if (sd_result == SDSTORAGE_OK) {
-        LOG_INFO("✅ [TX_TASK] SD card initialization SUCCESS");
-        
-        // 기본 쓰기 테스트
-        LOG_INFO("📤 [TX_TASK] Testing SD card write operation...");
-        const char* test_message = "SD Card Test - Hello World from FreeRTOS!\n";
-        int write_result = SDStorage_WriteLog(test_message, strlen(test_message));
-        
-        if (write_result == SDSTORAGE_OK) {
-            LOG_INFO("✅ [TX_TASK] SD card write operation SUCCESS");
-            LOG_INFO("🎉 [TX_TASK] SD card functionality confirmed - ready for long-term logging");
-        } else {
-            LOG_ERROR("❌ [TX_TASK] SD card write operation FAILED (code: %d)", write_result);
-        }
+static int _initialize_sd_card_and_test(void) {
+  LOG_INFO("📤 [TX_TASK] Starting SD card basic functionality test...");
+
+  // SD 초기화 시도
+  LOG_INFO("📤 [TX_TASK] Attempting SD card initialization...");
+  int sd_result = SDStorage_Init();
+
+  if (sd_result == SDSTORAGE_OK) {
+    LOG_INFO("✅ [TX_TASK] SD card initialization SUCCESS");
+
+    // 기본 쓰기 테스트
+    LOG_INFO("📤 [TX_TASK] Testing SD card write operation...");
+    const char *test_message = "SD Card Test - Hello World from FreeRTOS!\n";
+    int write_result = SDStorage_WriteLog(test_message, strlen(test_message));
+
+    if (write_result == SDSTORAGE_OK) {
+      LOG_INFO("✅ [TX_TASK] SD card write operation SUCCESS");
+      LOG_INFO("🎉 [TX_TASK] SD card functionality confirmed - ready for "
+               "long-term logging");
     } else {
-        LOG_ERROR("❌ [TX_TASK] SD card initialization FAILED (code: %d)", sd_result);
-        LOG_INFO("📺 [TX_TASK] Continuing with terminal-only logging");
+      LOG_ERROR("❌ [TX_TASK] SD card write operation FAILED (code: %d)",
+                write_result);
     }
-    
-    return sd_result;
+  } else {
+    LOG_ERROR("❌ [TX_TASK] SD card initialization FAILED (code: %d)",
+              sd_result);
+    LOG_INFO("📺 [TX_TASK] Continuing with terminal-only logging");
+  }
+
+  return sd_result;
 }
 
 /**
  * @brief LoRa UART 연결 설정
  * @return UART 연결 결과 (UART_STATUS_OK: 성공, 기타: 실패)
  */
-static int _setup_lora_uart_connection(void)
-{
-    LOG_INFO("📤 [TX_TASK] Connecting to UART for LoRa communication...");
-    UartStatus uart_status = UART_Connect("UART6");
-    
-    if (uart_status == UART_STATUS_OK) {
-        LOG_INFO("✅ [TX_TASK] UART connection successful");
-    } else {
-        LOG_ERROR("❌ [TX_TASK] UART connection failed (status: %d)", uart_status);
-    }
-    
-    return uart_status;
+static int _setup_lora_uart_connection(void) {
+  LOG_INFO("📤 [TX_TASK] Connecting to UART for LoRa communication...");
+  UartStatus uart_status = UART_Connect("UART6");
+
+  if (uart_status == UART_STATUS_OK) {
+    LOG_INFO("✅ [TX_TASK] UART connection successful");
+  } else {
+    LOG_ERROR("❌ [TX_TASK] UART connection failed (status: %d)", uart_status);
+  }
+
+  return uart_status;
 }
 
 /**
  * @brief LoRa 컨텍스트 초기화
  * @param lora_ctx LoRa 컨텍스트 포인터
  */
-static void _initialize_lora_context(LoraStarterContext* lora_ctx)
-{
-    LOG_INFO("📤 [TX_TASK] Waiting for LoRa module boot-up (5 seconds - optimized for long-term test)...");
-    osDelay(5000); // 5초 대기 (장기 테스트를 위해 단축)
-    
-    // LoraStarter 컨텍스트 초기화 (TDD 검증된 기본 설정 사용)
-    LoraStarter_InitWithDefaults(lora_ctx, "TEST");
-    
-    LOG_INFO("=== LoRa Initialization ===");
-    LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d", 
-             lora_ctx->num_commands, lora_ctx->send_message, lora_ctx->max_retry_count);
+static void _initialize_lora_context(LoraStarterContext *lora_ctx) {
+  LOG_INFO("📤 [TX_TASK] Waiting for LoRa module boot-up (5 seconds - "
+           "optimized for long-term test)...");
+  osDelay(5000); // 5초 대기 (장기 테스트를 위해 단축)
+
+  // LoraStarter 컨텍스트 초기화 (TDD 검증된 기본 설정 사용)
+  LoraStarter_InitWithDefaults(lora_ctx, "TEST");
+
+  LOG_INFO("=== LoRa Initialization ===");
+  LOG_INFO("📤 Commands: %d, Message: %s, Max retries: %d",
+           lora_ctx->num_commands, lora_ctx->send_message,
+           lora_ctx->max_retry_count);
 }
 
 /**
  * @brief SD 초기화 결과에 따른 로깅 모드 설정
  * @param sd_result SD 초기화 결과
  */
-static void _configure_logging_mode(int sd_result)
-{
-    // SD 카드 로깅 설정 (간단한 방식)
-    if (sd_result == SDSTORAGE_OK) {
-        LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
-        
-        // LoRa 로깅 모드 설정 - 초기화 단계에서는 터미널만 사용
-        LOGGER_SetMode(LOGGER_MODE_DUAL);  // 터미널 + SD 동시 출력
-        LOGGER_SetFilterLevel(LOG_LEVEL_INFO);  // 터미널에서 모든 로그 확인 가능
-        LOGGER_SetSDFilterLevel(LOG_LEVEL_WARN);  // SD 카드에는 WARN 이상만 저장
-        LOGGER_EnableSDLogging(false);  // 초기화 완료 전까지 SD 로깅 비활성화
-        LOG_WARN("✅ LoRa logging mode: DUAL (Terminal + SD), SD logging will start from JOIN attempts");
-    } else {
-        LOG_INFO("📺 LoRa logs will be displayed on terminal only (SD not available)");
-        
-        LOGGER_SetMode(LOGGER_MODE_TERMINAL_ONLY);
-        LOGGER_SetFilterLevel(LOG_LEVEL_INFO);
-        LOG_INFO("📺 LoRa logging mode: Terminal only");
-    }
+static void _configure_logging_mode(int sd_result) {
+  // SD 카드 로깅 설정 (간단한 방식)
+  if (sd_result == SDSTORAGE_OK) {
+    LOG_INFO("🗂️ LoRa logs will be saved to SD card: lora_logs/");
+
+    // LoRa 로깅 모드 설정 - 초기화 단계에서는 터미널만 사용
+    LOGGER_SetMode(LOGGER_MODE_DUAL);        // 터미널 + SD 동시 출력
+    LOGGER_SetFilterLevel(LOG_LEVEL_INFO);   // 터미널에서 모든 로그 확인 가능
+    LOGGER_SetSDFilterLevel(LOG_LEVEL_WARN); // SD 카드에는 WARN 이상만 저장
+    LOGGER_EnableSDLogging(false); // 초기화 완료 전까지 SD 로깅 비활성화
+    LOG_WARN("✅ LoRa logging mode: DUAL (Terminal + SD), SD logging will "
+             "start from JOIN attempts");
+  } else {
+    LOG_INFO(
+        "📺 LoRa logs will be displayed on terminal only (SD not available)");
+
+    LOGGER_SetMode(LOGGER_MODE_TERMINAL_ONLY);
+    LOGGER_SetFilterLevel(LOG_LEVEL_INFO);
+    LOG_INFO("📺 LoRa logging mode: Terminal only");
+  }
 }
 
 /**
  * @brief LoRa 프로세스 메인 루프 실행
  * @param lora_ctx LoRa 컨텍스트 포인터
  */
-static void _run_lora_process_loop(LoraStarterContext* lora_ctx)
-{
-    LOG_INFO("📤 [TX_TASK] Starting LoRa process loop...");
-    
-    for(;;)
-    {
-        // 수신된 응답이 있으면 LoraStarter에 전달
-        const char* rx_data = NULL;
-        if (lora_new_response) {
-            rx_data = lora_rx_response;
-            lora_new_response = false; // 플래그 클리어
-            // 응답 처리 - 로그는 ResponseHandler에서 이미 출력됨
-        }
-        
-        // LoraStarter 프로세스 실행
-        LoraStarter_Process(lora_ctx, rx_data);
-        
-        // JOIN 성공 후 시간 조회는 LoRa 상태 머신에서 자동 처리됨 (TIMEREQ → LTIME)
-        
-        // 상태별 처리 간격 및 디버깅 (중요한 상태만)
-        static int last_state = -1;
-        if (lora_ctx->state != last_state) {
-            // JOIN, SEND, ERROR 등 중요한 상태 변경만 로그 출력
-            if (lora_ctx->state == LORA_STATE_SEND_JOIN || 
-                lora_ctx->state == LORA_STATE_SEND_PERIODIC ||
-                lora_ctx->state == LORA_STATE_DONE ||
-                lora_ctx->state == LORA_STATE_ERROR) {
-                LOG_INFO("[TX_TASK] ⚙️ LoRa State: %d, cmd_index: %d/%d", 
-                          lora_ctx->state, lora_ctx->cmd_index, lora_ctx->num_commands);
-            }
-            last_state = lora_ctx->state;
-        }
-        
-        switch(lora_ctx->state) {
-            case LORA_STATE_INIT:
-                osDelay(500); // 초기화 상태는 빠르게
-                break;
-            case LORA_STATE_SEND_CMD:
-                LOG_INFO("[TX_TASK] 📤 Sending command %d/%d", 
-                        lora_ctx->cmd_index + 1, lora_ctx->num_commands);
-                osDelay(1000); // 명령어 전송 후 1초 대기
-                break;
-            case LORA_STATE_WAIT_OK:
-                // OK 응답 대기 중 - 조용히 대기
-                osDelay(2000); // OK 응답 대기 중 2초 간격
-                break;
-            case LORA_STATE_SEND_JOIN:
-                // JOIN 시도 시작 - SD 로깅 활성화 (영구적)
-                if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
-                    LOGGER_EnableSDLogging(true);
-                    LOG_WARN("🗂️ SD logging enabled from JOIN attempts (WARN+ levels only)");
-                }
-                osDelay(2000); // JOIN 명령어 전송 후 2초 대기
-                break;
-            case LORA_STATE_WAIT_JOIN_OK:
-                // JOIN 성공 확인 시 SD 로깅 영구 활성화 보장
-                if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
-                    LOGGER_EnableSDLogging(true);
-                    LOG_WARN("🗂️ SD logging permanently enabled after JOIN success");
-                }
-                osDelay(3000); // JOIN 응답 대기 중 3초 간격
-                break;
-            case LORA_STATE_SEND_TIMEREQ:
-                osDelay(1000); // TIMEREQ 명령어 전송 후 1초 대기
-                break;
-            case LORA_STATE_SEND_LTIME:
-                osDelay(1000); // LTIME 명령어 전송 후 1초 대기
-                break;
-            case LORA_STATE_SEND_PERIODIC:
-                // 주기적 SEND 시 SD 로깅 상태 확인 및 활성화
-                if (g_sd_initialization_result == SDSTORAGE_OK && !LOGGER_IsSDLoggingEnabled()) {
-                    LOGGER_EnableSDLogging(true);
-                    LOG_WARN("🗂️ SD logging re-enabled for periodic SEND");
-                }
-                osDelay(2000); // SEND 명령어 전송 후 2초 대기
-                break;
-            case LORA_STATE_WAIT_TIMEREQ_OK:
-            case LORA_STATE_WAIT_LTIME_RESPONSE:
-            case LORA_STATE_WAIT_SEND_RESPONSE:
-                osDelay(3000); // 응답 대기 중 3초 간격
-                break;
-            case LORA_STATE_WAIT_TIME_SYNC:
-                osDelay(1000); // 시간 동기화 대기 중 1초 간격으로 체크
-                break;
-            case LORA_STATE_WAIT_SEND_INTERVAL:
-                // 주기적 전송 대기 중 - 로그 출력 없이 조용히 대기
-                osDelay(5000); // 주기적 전송 대기 중 5초 간격으로 체크
-                break;
-            case LORA_STATE_JOIN_RETRY:
-                osDelay(5000); // 재시도 대기 5초
-                break;
-            case LORA_STATE_DONE:
-            case LORA_STATE_ERROR:
-                LOG_INFO("📤 [TX_TASK] LoRa process completed with state: %s", 
-                        lora_ctx->state == LORA_STATE_DONE ? "DONE" : "ERROR");
-                return; // 루프 종료하고 idle로 이동
-            default:
-                osDelay(1000);
-                break;
-        }
+static void _run_lora_process_loop(LoraStarterContext *lora_ctx) {
+  LOG_INFO("📤 [TX_TASK] Starting LoRa process loop...");
+
+  for (;;) {
+    // 수신된 응답이 있으면 LoraStarter에 전달
+    const char *rx_data = NULL;
+    if (lora_new_response) {
+      rx_data = lora_rx_response;
+      lora_new_response = false; // 플래그 클리어
+      // 응답 처리 - 로그는 ResponseHandler에서 이미 출력됨
     }
+
+    // LoraStarter 프로세스 실행
+    LoraStarter_Process(lora_ctx, rx_data);
+
+    // JOIN 성공 후 시간 조회는 LoRa 상태 머신에서 자동 처리됨 (TIMEREQ → LTIME)
+
+    // 상태별 처리 간격 및 디버깅 (중요한 상태만)
+    static int last_state = -1;
+    if (lora_ctx->state != last_state) {
+      // JOIN, SEND, ERROR 등 중요한 상태 변경만 로그 출력
+      if (lora_ctx->state == LORA_STATE_SEND_JOIN ||
+          lora_ctx->state == LORA_STATE_SEND_PERIODIC ||
+          lora_ctx->state == LORA_STATE_DONE ||
+          lora_ctx->state == LORA_STATE_ERROR) {
+        LOG_INFO("[TX_TASK] ⚙️ LoRa State: %d, cmd_index: %d/%d",
+                 lora_ctx->state, lora_ctx->cmd_index, lora_ctx->num_commands);
+      }
+      last_state = lora_ctx->state;
+    }
+
+    switch (lora_ctx->state) {
+    case LORA_STATE_INIT:
+      osDelay(500); // 초기화 상태는 빠르게
+      break;
+    case LORA_STATE_SEND_CMD:
+      LOG_INFO("[TX_TASK] 📤 Sending command %d/%d", lora_ctx->cmd_index + 1,
+               lora_ctx->num_commands);
+      osDelay(1000); // 명령어 전송 후 1초 대기
+      break;
+    case LORA_STATE_WAIT_OK:
+      // OK 응답 대기 중 - 조용히 대기
+      osDelay(2000); // OK 응답 대기 중 2초 간격
+      break;
+    case LORA_STATE_SEND_JOIN:
+      // JOIN 시도 시작 - SD 로깅 활성화 (영구적)
+      if (g_sd_initialization_result == SDSTORAGE_OK &&
+          !LOGGER_IsSDLoggingEnabled()) {
+        LOGGER_EnableSDLogging(true);
+        LOG_WARN(
+            "🗂️ SD logging enabled from JOIN attempts (WARN+ levels only)");
+      }
+      osDelay(2000); // JOIN 명령어 전송 후 2초 대기
+      break;
+    case LORA_STATE_WAIT_JOIN_OK:
+      // JOIN 성공 확인 시 SD 로깅 영구 활성화 보장
+      if (g_sd_initialization_result == SDSTORAGE_OK &&
+          !LOGGER_IsSDLoggingEnabled()) {
+        LOGGER_EnableSDLogging(true);
+        LOG_WARN("🗂️ SD logging permanently enabled after JOIN success");
+      }
+      osDelay(3000); // JOIN 응답 대기 중 3초 간격
+      break;
+    case LORA_STATE_SEND_TIMEREQ:
+      osDelay(1000); // TIMEREQ 명령어 전송 후 1초 대기
+      break;
+    case LORA_STATE_SEND_LTIME:
+      osDelay(1000); // LTIME 명령어 전송 후 1초 대기
+      break;
+    case LORA_STATE_SEND_PERIODIC:
+      // 주기적 SEND 시 SD 로깅 상태 확인 및 활성화
+      if (g_sd_initialization_result == SDSTORAGE_OK &&
+          !LOGGER_IsSDLoggingEnabled()) {
+        LOGGER_EnableSDLogging(true);
+        LOG_WARN("🗂️ SD logging re-enabled for periodic SEND");
+      }
+      osDelay(2000); // SEND 명령어 전송 후 2초 대기
+      break;
+    case LORA_STATE_WAIT_TIMEREQ_OK:
+    case LORA_STATE_WAIT_LTIME_RESPONSE:
+    case LORA_STATE_WAIT_SEND_RESPONSE:
+      osDelay(3000); // 응답 대기 중 3초 간격
+      break;
+    case LORA_STATE_WAIT_TIME_SYNC:
+      osDelay(1000); // 시간 동기화 대기 중 1초 간격으로 체크
+      break;
+    case LORA_STATE_WAIT_SEND_INTERVAL:
+      // 주기적 전송 대기 중 - 저전력 모드 사용
+      if (!PowerMgmt_IsAlarmSet()) {
+        // 5분(300초) 알람 설정하고 Sleep 모드 진입
+        PowerMgmt_SetAlarmAndSleep(300);
+
+        // 알람에서 깨어나면 다음 LoRa 전송 준비
+        LOG_INFO("[PowerMgmt] 🔋 Woke up from 5-minute sleep, ready for next "
+                 "LoRa transmission");
+      } else {
+        // 알람이 이미 설정된 경우 짧은 대기
+        osDelay(1000);
+      }
+      break;
+    case LORA_STATE_JOIN_RETRY:
+      osDelay(5000); // 재시도 대기 5초
+      break;
+    case LORA_STATE_DONE:
+    case LORA_STATE_ERROR:
+      LOG_INFO("📤 [TX_TASK] LoRa process completed with state: %s",
+               lora_ctx->state == LORA_STATE_DONE ? "DONE" : "ERROR");
+      return; // 루프 종료하고 idle로 이동
+    default:
+      osDelay(1000);
+      break;
+    }
+  }
 }
 
 /**
  * @brief Idle 모드 진입 및 처리
  */
-static void _enter_idle_loop(void)
-{
-    LOG_INFO("📤 [TX_TASK] Entering idle mode...");
-    uint32_t idle_counter = 0;
-    
-    for(;;)
-    {
-        // 30초마다 idle 상태 표시
-        osDelay(30000);
-        idle_counter++;
-        LOG_INFO("📤 [TX_TASK] Idle mode: %lu minutes elapsed", idle_counter / 2);
-    }
+static void _enter_idle_loop(void) {
+  LOG_INFO("📤 [TX_TASK] Entering idle mode...");
+  uint32_t idle_counter = 0;
+
+  for (;;) {
+    // 30초마다 idle 상태 표시
+    osDelay(30000);
+    idle_counter++;
+    LOG_INFO("📤 [TX_TASK] Idle mode: %lu minutes elapsed", idle_counter / 2);
+  }
 }
 
 /* USER CODE BEGIN Header_StartDefaultTask */
 /**
-  * @brief  Function implementing the defaultTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
+ * @brief  Function implementing the defaultTask thread.
+ * @param  argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void const * argument)
-{
+void StartDefaultTask(void const *argument) {
   /* init code for USB_HOST - 임시 비활성화 (SD 카드 테스트용) */
-  LOG_WARN("USB Host initialization temporarily disabled to avoid RTOS task conflicts");
+  LOG_WARN("USB Host initialization temporarily disabled to avoid RTOS task "
+           "conflicts");
   LOG_INFO("This eliminates USBH_Thread vs defaultTask priority conflicts");
   // MX_USB_HOST_Init();  // SD 카드 테스트 완료 후 재활성화 예정
   /* USER CODE BEGIN 5 */
-  
+
   // SD Card 초기화는 이미 main()에서 우선 완료됨
-  LOG_INFO("📋 SD card initialization completed in main() - checking status...");
-  
+  LOG_INFO(
+      "📋 SD card initialization completed in main() - checking status...");
+
   LOG_INFO("=== STM32F746G-DISCO UART6 Test Started ===");
   LOG_INFO("System Clock: %lu MHz", SystemCoreClock / 1000000);
-  
+
   // 런타임 설정 시스템 초기화
   SystemConfig_InitializeSystem();
-  
+
   // 런타임 설정에서 값 가져오기
   LOG_INFO("UART6 Configuration: %lu baud, 8N1", GET_UART_BAUDRATE());
   LOG_INFO("LoRa Send Interval: %lu ms", GET_LORA_SEND_INTERVAL());
   LOG_INFO("SD Log File Max Size: %lu bytes", GET_SD_LOG_FILE_MAX_SIZE());
-  LOG_INFO("📌 CRITICAL: For loopback test, connect PC6(TX) to PC7(RX) with a wire!");
+  LOG_INFO("📌 CRITICAL: For loopback test, connect PC6(TX) to PC7(RX) with a "
+           "wire!");
   LOG_INFO("📌 UART6 Pins: PC6(TX) = Arduino D1, PC7(RX) = Arduino D0");
-  
+
   // 1. SD 카드 초기화 및 기본 기능 테스트
   g_sd_initialization_result = _initialize_sd_card_and_test();
-  
+
   // 2. LoRa UART 연결 설정
   LOG_INFO("📤 [TX_TASK] Starting LoRa initialization and JOIN...");
   int uart_result = _setup_lora_uart_connection();
   if (uart_result != UART_STATUS_OK) {
     LOG_ERROR("❌ [TX_TASK] UART setup failed, continuing anyway...");
   }
-  
+
   // 3. LoRa 컨텍스트 초기화
   LoraStarterContext lora_ctx;
   _initialize_lora_context(&lora_ctx);
-  
+
   // 4. 로깅 모드 설정
   _configure_logging_mode(g_sd_initialization_result);
-  
+
   // 5. LoRa 프로세스 메인 루프 실행
   _run_lora_process_loop(&lora_ctx);
-  
+
   // 6. Idle 모드 진입
   _enter_idle_loop();
-  
+
   /* USER CODE END 5 */
 }
 
 /* USER CODE BEGIN Header_StartSDLoggingTask */
 /**
-  * @brief  Function implementing the sdLoggingTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
+ * @brief  Function implementing the sdLoggingTask thread.
+ * @param  argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_StartSDLoggingTask */
-void StartSDLoggingTask(void const * argument)
-{
+void StartSDLoggingTask(void const *argument) {
   /* USER CODE BEGIN StartSDLoggingTask */
   LOG_INFO("=== SD Logging Task Started ===");
-  
+
   // 시스템 안정화 대기 (다른 태스크들 먼저 시작)
   osDelay(3000);
-  
+
   // SD 초기화 시도 (이미 정상이면 스킵)
   bool sd_init_needed = !SDStorage_IsReady();
   int init_result = SDSTORAGE_OK; // 기본값: 성공
-  
+
   if (sd_init_needed) {
     LOG_INFO("[SD_TASK] 🔄 Attempting SD card initialization...");
-    
+
     // 단계별 안전한 SD 초기화
     int init_attempts = 0;
     const int MAX_INIT_ATTEMPTS = 3;
-    
-    for (init_attempts = 0; init_attempts < MAX_INIT_ATTEMPTS; init_attempts++) {
-    LOG_INFO("[SD_TASK] Initialization attempt %d/%d", init_attempts + 1, MAX_INIT_ATTEMPTS);
-    
-    // SDStorage_Init을 타임아웃과 함께 호출
-    uint32_t init_start_time = HAL_GetTick();
-    const uint32_t INIT_TIMEOUT_MS = 10000;  // 10초 타임아웃
-    
-    // TODO: 실제로는 별도 태스크에서 SDStorage_Init 호출하고 여기서는 폴링
-    // 현재는 간단히 직접 호출하되 타임아웃 체크
-    init_result = SDStorage_Init();
-    uint32_t init_duration = HAL_GetTick() - init_start_time;
-    
-    LOG_INFO("[SD_TASK] Init attempt %d took %lu ms, result: %d", 
-             init_attempts + 1, init_duration, init_result);
-    
-    if (init_result == SDSTORAGE_OK) {
-      LOG_INFO("[SD_TASK] ✅ SD initialization successful!");
-      g_sd_initialization_result = SDSTORAGE_OK;
-      g_sd_logging_active = true;
-      break;
-    } else {
-      LOG_WARN("[SD_TASK] ⚠️ SD init attempt %d failed (code: %d)", 
-               init_attempts + 1, init_result);
-      
-      if (init_attempts < MAX_INIT_ATTEMPTS - 1) {
-        LOG_INFO("[SD_TASK] Waiting 5 seconds before retry...");
-        osDelay(5000);
+
+    for (init_attempts = 0; init_attempts < MAX_INIT_ATTEMPTS;
+         init_attempts++) {
+      LOG_INFO("[SD_TASK] Initialization attempt %d/%d", init_attempts + 1,
+               MAX_INIT_ATTEMPTS);
+
+      // SDStorage_Init을 타임아웃과 함께 호출
+      uint32_t init_start_time = HAL_GetTick();
+      const uint32_t INIT_TIMEOUT_MS = 10000; // 10초 타임아웃
+
+      // TODO: 실제로는 별도 태스크에서 SDStorage_Init 호출하고 여기서는 폴링
+      // 현재는 간단히 직접 호출하되 타임아웃 체크
+      init_result = SDStorage_Init();
+      uint32_t init_duration = HAL_GetTick() - init_start_time;
+
+      LOG_INFO("[SD_TASK] Init attempt %d took %lu ms, result: %d",
+               init_attempts + 1, init_duration, init_result);
+
+      if (init_result == SDSTORAGE_OK) {
+        LOG_INFO("[SD_TASK] ✅ SD initialization successful!");
+        g_sd_initialization_result = SDSTORAGE_OK;
+        g_sd_logging_active = true;
+        break;
+      } else {
+        LOG_WARN("[SD_TASK] ⚠️ SD init attempt %d failed (code: %d)",
+                 init_attempts + 1, init_result);
+
+        if (init_attempts < MAX_INIT_ATTEMPTS - 1) {
+          LOG_INFO("[SD_TASK] Waiting 5 seconds before retry...");
+          osDelay(5000);
+        }
       }
-    }
     } // for loop 종료
   } else {
     // 이미 SD가 준비된 경우
@@ -2119,49 +2058,49 @@ void StartSDLoggingTask(void const * argument)
     g_sd_initialization_result = SDSTORAGE_OK;
     g_sd_logging_active = true;
   }
-  
+
   // 초기화 결과에 따른 후속 처리
   if (init_result != SDSTORAGE_OK) {
     LOG_ERROR("[SD_TASK] ❌ All SD initialization attempts failed");
     LOG_INFO("[SD_TASK] Continuing with terminal-only logging");
-    
+
     // SD 실패해도 태스크는 계속 실행 (나중에 재시도 가능)
-    for(;;) {
-      osDelay(60000);  // 1분마다 재시도 체크 (향후 확장)
+    for (;;) {
+      osDelay(60000); // 1분마다 재시도 체크 (향후 확장)
     }
   }
-  
+
   LOG_INFO("[SD_TASK] 🗂️ SD logging queue processing started");
-  
+
   // SD 로그 큐 처리 메인 루프
-  for(;;)
-  {
+  for (;;) {
     SDLogEntry_t log_entry;
-    osEvent event = osMessageGet(sdLogQueueHandle, 1000);  // 1초 타임아웃
-    
+    osEvent event = osMessageGet(sdLogQueueHandle, 1000); // 1초 타임아웃
+
     if (event.status == osEventMessage) {
       // 큐에서 로그 엔트리 수신
-      log_entry = *((SDLogEntry_t*)event.value.p);
-      
+      log_entry = *((SDLogEntry_t *)event.value.p);
+
       // SD에 안전하게 쓰기 (타임아웃 포함)
       uint32_t write_start = HAL_GetTick();
-      int write_result = SDStorage_WriteLog(log_entry.message, log_entry.length);
+      int write_result =
+          SDStorage_WriteLog(log_entry.message, log_entry.length);
       uint32_t write_duration = HAL_GetTick() - write_start;
-      
+
       if (write_result != SDSTORAGE_OK) {
         // SD 쓰기 실패 - 터미널에만 에러 출력 (무한루프 방지)
-        printf("[SD_TASK] Write failed (duration: %lu ms, result: %d)\n", 
+        printf("[SD_TASK] Write failed (duration: %lu ms, result: %d)\n",
                write_duration, write_result);
-        
+
         // SD 쓰기 실패 시 잠시 대기 후 재시도 여부 결정
         osDelay(1000);
       }
     }
-    
+
     // 주기적으로 SD 상태 체크 (1분마다)
     static uint32_t status_check_counter = 0;
     status_check_counter++;
-    if (status_check_counter % 60 == 0) {  // 60초마다
+    if (status_check_counter % 60 == 0) { // 60초마다
       if (SDStorage_IsReady()) {
         // SD 상태 정상
       } else {
@@ -2169,55 +2108,53 @@ void StartSDLoggingTask(void const * argument)
         LOG_WARN("[SD_TASK] SD card appears disconnected - monitoring");
       }
     }
-    
-    osDelay(50);  // CPU 부하 방지
+
+    osDelay(50); // CPU 부하 방지
   }
   /* USER CODE END StartSDLoggingTask */
 }
 
 /* USER CODE BEGIN Header_StartReceiveTask */
 /**
-  * @brief  Function implementing the receiveTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
+ * @brief  Function implementing the receiveTask thread.
+ * @param  argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_StartReceiveTask */
-void StartReceiveTask(void const * argument)
-{
+void StartReceiveTask(void const *argument) {
   /* USER CODE BEGIN StartReceiveTask */
   LOG_INFO("=== DMA-based Receive Task Started ===");
-  
+
   // UART 초기화 대기
   osDelay(2000);
-  
+
   // TDD 모듈들을 사용한 DMA 기반 수신 태스크
   char local_buffer[512];
   int local_bytes_received = 0;
-  
-  for(;;)
-  {
+
+  for (;;) {
     // TDD UART 모듈을 통한 DMA 기반 수신 체크
-    UartStatus status = UART_Receive(local_buffer, sizeof(local_buffer), &local_bytes_received);
-    
+    UartStatus status =
+        UART_Receive(local_buffer, sizeof(local_buffer), &local_bytes_received);
+
     // 디버깅용: 수신 상태 체크 (에러 상태일 때만)
     static uint32_t debug_counter = 0;
     debug_counter++;
-    if (debug_counter % 1200 == 0 && status != UART_STATUS_TIMEOUT) {  // 1분마다, 타임아웃 제외
-      LOG_DEBUG("[RX_TASK] Status check #%lu: status=%d, bytes=%d", 
-               debug_counter / 1200, status, local_bytes_received);
+    if (debug_counter % 1200 == 0 &&
+        status != UART_STATUS_TIMEOUT) { // 1분마다, 타임아웃 제외
+      LOG_DEBUG("[RX_TASK] Status check #%lu: status=%d, bytes=%d",
+                debug_counter / 1200, status, local_bytes_received);
     }
-    
+
     if (status == UART_STATUS_OK && local_bytes_received > 0) {
       // 수신 완료 - 간단한 수신 로그 + ResponseHandler 분석
-      LOG_INFO("📥 RECV: '%.30s%s' (%d bytes)", 
-               local_buffer, 
-               (local_bytes_received > 30) ? "..." : "", 
-               local_bytes_received);
-      
+      LOG_INFO("📥 RECV: '%.30s%s' (%d bytes)", local_buffer,
+               (local_bytes_received > 30) ? "..." : "", local_bytes_received);
+
       // 기본적인 응답 타입 체크 (ResponseHandler에서 상세 로그 출력)
       if (strstr(local_buffer, "+EVT:JOINED") != NULL) {
         LOG_INFO("✅ JOIN CONFIRMED - Network joined successfully");
-        g_join_success_time = HAL_GetTick();  // JOIN 성공 시간 기록
+        g_join_success_time = HAL_GetTick(); // JOIN 성공 시간 기록
       } else if (strstr(local_buffer, "RAKwireless") != NULL) {
         LOG_DEBUG("📡 LoRa module boot message (ignored)");
       } else if (ResponseHandler_IsTimeResponse(local_buffer)) {
@@ -2225,14 +2162,14 @@ void StartReceiveTask(void const * argument)
         ResponseHandler_ParseTimeResponse(local_buffer);
       }
       // 나머지 응답 분석은 아래 필터링 로직에서 한 번만 처리
-      
+
       // 전역 변수에 복사 (다른 태스크에서 사용 가능)
       memcpy(rx_buffer, local_buffer, local_bytes_received);
       rx_bytes_received = local_bytes_received;
-      
+
       // LoRa 상태 머신에 전달할 응답만 필터링
       bool is_lora_command_response = false;
-      
+
       if (is_response_ok(local_buffer)) {
         // OK 응답 - LoRa 명령에 대한 응답
         is_lora_command_response = true;
@@ -2245,53 +2182,54 @@ void StartReceiveTask(void const * argument)
       } else if (strstr(local_buffer, "+EVT:") != NULL) {
         // 기타 LoRa 이벤트 응답들
         is_lora_command_response = true;
-      } else if (strstr(local_buffer, "RAKwireless") != NULL || strstr(local_buffer, "ORAKwireless") != NULL) {
+      } else if (strstr(local_buffer, "RAKwireless") != NULL ||
+                 strstr(local_buffer, "ORAKwireless") != NULL) {
         // 부트 메시지 - LoRa 상태 머신에 전달하지 않음
-        LOG_DEBUG("[RX_TASK] Boot message filtered out from LoRa state machine");
+        LOG_DEBUG(
+            "[RX_TASK] Boot message filtered out from LoRa state machine");
       } else {
         // 기타 응답들 (ERROR, TIMEOUT 등)
-        ResponseType response_type = ResponseHandler_ParseSendResponse(local_buffer);
+        ResponseType response_type =
+            ResponseHandler_ParseSendResponse(local_buffer);
         if (response_type != RESPONSE_UNKNOWN) {
           is_lora_command_response = true;
         }
       }
-      
+
       // LoRa 명령 응답만 전역 변수에 복사
       if (is_lora_command_response) {
         memcpy(lora_rx_response, local_buffer, local_bytes_received);
         lora_rx_response[local_bytes_received] = '\0';
         lora_new_response = true;
-        LOG_DEBUG("[RX_TASK] LoRa response forwarded to state machine: %.20s...", local_buffer);
+        LOG_DEBUG(
+            "[RX_TASK] LoRa response forwarded to state machine: %.20s...",
+            local_buffer);
       }
-      
+
       // 버퍼 클리어
       memset(local_buffer, 0, sizeof(local_buffer));
       local_bytes_received = 0;
     }
-    
+
     // DMA 기반이므로 긴 지연으로 CPU 사용률 감소
-    osDelay(50);  // 50ms 지연 (DMA가 백그라운드에서 처리하므로 빠른 폴링 불필요)
+    osDelay(50); // 50ms 지연 (DMA가 백그라운드에서 처리하므로 빠른 폴링 불필요)
   }
   /* USER CODE END StartReceiveTask */
 }
 
-
-
 /**
-  * @brief  Period elapsed callback in non blocking mode
-  * @note   This function is called  when TIM6 interrupt took place, inside
-  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
-  * a global variable "uwTick" used as application time base.
-  * @param  htim : TIM handle
-  * @retval None
-  */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
+ * @brief  Period elapsed callback in non blocking mode
+ * @note   This function is called  when TIM6 interrupt took place, inside
+ * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+ * a global variable "uwTick" used as application time base.
+ * @param  htim : TIM handle
+ * @retval None
+ */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   /* USER CODE BEGIN Callback 0 */
 
   /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM6)
-  {
+  if (htim->Instance == TIM6) {
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
@@ -2300,44 +2238,41 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 }
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
-void Error_Handler(void)
-{
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
+void Error_Handler(void) {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
+  while (1) {
   }
   /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
+void assert_failed(uint8_t *file, uint32_t line) {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* User can add his own implementation to report the file name and line
+     number, ex: printf("Wrong parameters value: file %s on line %d\r\n", file,
+     line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
 
 /**
-  * @brief DMA Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_DMA_Init(void)
-{
+ * @brief DMA Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_DMA_Init(void) {
   /* DMA controller clock enable */
   __HAL_RCC_DMA2_CLK_ENABLE();
 
@@ -2345,24 +2280,23 @@ static void MX_DMA_Init(void)
   /* DMA2_Stream1_IRQn interrupt configuration - USART6_RX */
   HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
-  
+
   /* USART6_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(USART6_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(USART6_IRQn);
 }
 
 /**
-  * @brief DMA2 Stream1 DMA configuration for USART6 RX
-  * @param None
-  * @retval None
-  */
-void MX_USART6_DMA_Init(void)
-{
+ * @brief DMA2 Stream1 DMA configuration for USART6 RX
+ * @param None
+ * @retval None
+ */
+void MX_USART6_DMA_Init(void) {
   // DMA 이미 초기화되었는지 체크
   if (hdma_usart6_rx.Instance != NULL) {
     return; // 이미 초기화됨
   }
-  
+
   /* Configure DMA for USART6 RX */
   hdma_usart6_rx.Instance = DMA2_Stream1;
   hdma_usart6_rx.Init.Channel = DMA_CHANNEL_5;
@@ -2371,13 +2305,12 @@ void MX_USART6_DMA_Init(void)
   hdma_usart6_rx.Init.MemInc = DMA_MINC_ENABLE;
   hdma_usart6_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
   hdma_usart6_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-  hdma_usart6_rx.Init.Mode = DMA_NORMAL;    // 일반 모드로 변경
+  hdma_usart6_rx.Init.Mode = DMA_NORMAL; // 일반 모드로 변경
   hdma_usart6_rx.Init.Priority = DMA_PRIORITY_HIGH;
   hdma_usart6_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
-  
+
   HAL_StatusTypeDef dma_result = HAL_DMA_Init(&hdma_usart6_rx);
-  if (dma_result != HAL_OK)
-  {
+  if (dma_result != HAL_OK) {
     // 에러 처리하되 Error_Handler() 호출하지 않음 (시스템 중단 방지)
     hdma_usart6_rx.Instance = NULL; // 실패 표시
     return;
